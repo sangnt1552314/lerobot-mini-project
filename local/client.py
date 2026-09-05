@@ -4,15 +4,16 @@ Does NOT move the robot. This is just a communication prototype.
 """
 
 import json
+import os
 import time
 
 import requests
 
 from cameras import CameraManager
 
-# Later replace with your ngrok URL, e.g.:
-# SERVER_URL = "https://xxxx.ngrok.app"
-SERVER_URL = "http://localhost:8000"
+# Set via `export SERVER_URL=...` before running, e.g.:
+# export SERVER_URL="https://xxxx.ngrok-free.dev"
+SERVER_URL = os.environ.get("SERVER_URL", "http://localhost:8000")
 
 INSTRUCTION = "pick up the red cube"
 
