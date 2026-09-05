@@ -1,16 +1,40 @@
 #!/bin/bash
-#PBS -N so101-server
-#PBS -l select=1:ncpus=4:ngpus=1
-#PBS -l walltime=02:00:00
+#PBS -P CFP05-CF-002
 #PBS -j oe
+#PBS -k oed
+#PBS -N lerobot-mini-project-run-server
+#PBS -q auto
+#PBS -l select=1:ngpus=1
+#PBS -l walltime=02:00:00
 
-# NOTE: A GPU is not actually needed for this fake server.
-# ngpus=1 is a placeholder for later, once the real robot policy is loaded here.
+cd $PBS_O_WORKDIR
 
-cd "$PBS_O_WORKDIR"
+image="/app1/common/singularity-img/hopper/pytorch/pytorch_2.6.0_cuda_12.8.sif"
 
-# TODO: activate your Python environment here, e.g.:
-# source /path/to/venv/bin/activate
-# or: conda activate my_env
+module load singularity
+
+LOG_DIR='./logs/server'
+mkdir -p $LOG_DIR
+
+singularity exec -e --nv \
+--env HF_HOME=/scratch/e1583535/cache \
+--env HF_HUB_OFFLINE=1 \
+--env TMPDIR=/scratch/e1583535/tmp \
+--env TEMP=/scratch/e1583535/tmp \
+--env TMP=/scratch/e1583535/tmp \
+$image bash << 'EOF' > $LOG_DIR/stdout.$PBS_JOBID.log 2> $LOG_DIR/stderr.$PBS_JOBID.log
+
+mkdir -p /scratch/e1583535/tmp
+
+if [ -d "/scratch/e1583535/virtualenvs/my_lebot" ]; then
+    source /scratch/e1583535/virtualenvs/my_lebot/bin/activate
+fi
+
+echo "Starting policy worker at $(date)"
+echo "Running on host: $(hostname)"
+echo "GPU info:"
+nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader,nounits || echo "No GPU detected"
 
 python server/server.py
+
+EOF
