@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 
 from cameras import CameraManager
 from robot import SO101Robot
+from action_format import JOINT_ORDER, validate_action
 
 load_dotenv()
 
@@ -69,10 +70,20 @@ def main():
                 latency_ms = (time.perf_counter() - start) * 1000
                 response.raise_for_status()
                 result = response.json()
+                actions = result["actions"]
                 print(
                     f"observation={observation_id} robot_state={robot_state} "
-                    f"latency={latency_ms:.1f} ms actions={result['actions']} mode={MODE}"
+                    f"latency={latency_ms:.1f} ms actions={actions} mode={MODE}"
                 )
+
+                # Stage 3: inspect the action format only - never execute it yet.
+                valid, reason = validate_action(actions[0]) if actions else (False, "empty actions")
+                print(f"mode={MODE}")
+                print(f"action shape: ({len(actions)}, {len(actions[0]) if actions else 0})")
+                print(f"action type: {type(actions).__name__}")
+                print(f"joint order: {JOINT_ORDER}")
+                print("gripper representation: SO101 arm-frame degrees (converted server-side, see server/policy.py)")
+                print(f"valid: {valid} ({reason})")
             except requests.RequestException as e:
                 print(f"observation={observation_id} request failed: {e}")
 

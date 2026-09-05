@@ -10,7 +10,10 @@ from lerobot.robots.so_follower.config_so_follower import SOFollowerRobotConfig
 
 class SO101Robot:
     def __init__(self, port, robot_id):
-        config = SOFollowerRobotConfig(port=port, id=robot_id)
+        # use_degrees=True: MolmoAct2-SO100_101 expects the old (v2.1) degree
+        # convention, not LeRobot's newer normalized -100..100 range. See
+        # server/policy.py for the matching arm<->model frame conversion.
+        config = SOFollowerRobotConfig(port=port, id=robot_id, use_degrees=True)
         self.robot = SOFollower(config)
 
     def connect(self):

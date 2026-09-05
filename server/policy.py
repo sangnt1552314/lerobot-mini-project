@@ -4,13 +4,14 @@ Loading + predict_action call pattern follows the published SO-101 reference
 implementation:
 https://github.com/irenegracekp/molmoact2-so101/blob/main/molmoact_so101/model/policy.py
 
-NOTE (do not execute these actions on the robot yet):
-This does NOT yet convert between SO101's raw "arm frame" joint state and
-MolmoAct2's "model frame" state/action convention (that reference
-implementation applies a per-arm signs/offsets calibration before/after
-inference). Verifying joint order, units, and whether that conversion is
-needed is Stage 3 - see server/server.py comments. This stage only checks
-that we can load the real model and get a real-shaped action chunk back.
+STAGE 3: arm<->model frame conversion. MolmoAct2 was trained on the old
+LeRobot v2.1 SO-100/101 joint convention (degrees, zero = arm fully
+extended), while local/robot.py reads the arm with use_degrees=True to match
+that unit convention. The zero-point/sign difference still needs the official
+conversion documented at https://huggingface.co/docs/lerobot/backwardcomp and
+used as the inference.py defaults in the reference repo above
+(--joint-offsets, --joint-signs). predict() applies this both ways, so
+callers only ever see SO101 arm-frame values in and out.
 """
 
 import numpy as np
@@ -20,6 +21,18 @@ from transformers import AutoModelForImageTextToText, AutoProcessor
 
 REPO_ID = "allenai/MolmoAct2-SO100_101"
 NORM_TAG = "so100_so101_molmoact2"
+
+# [shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper]
+JOINT_OFFSETS = np.array([0.0, 90.0, 90.0, 0.0, 0.0, 0.0], dtype=np.float32)
+JOINT_SIGNS = np.array([1.0, -1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32)
+
+
+def arm_to_model(state):
+    return JOINT_SIGNS * np.asarray(state, dtype=np.float32) + JOINT_OFFSETS
+
+
+def model_to_arm(actions):
+    return (np.asarray(actions, dtype=np.float32) - JOINT_OFFSETS) * JOINT_SIGNS
 
 
 class MolmoAct2Policy:
@@ -38,10 +51,10 @@ class MolmoAct2Policy:
         print("[MolmoAct2] Model ready.")
 
     def predict(self, wrist_image, third_image, robot_state, instruction):
-        """wrist_image/third_image: PIL.Image. robot_state: list of floats (raw
-        SO101 joint values, order as read from robot.get_state()). Returns a
-        (T, JOINT_COUNT) list of lists - raw model output, unconverted."""
-        state = np.asarray(robot_state, dtype=np.float32)
+        """wrist_image/third_image: PIL.Image. robot_state: list of floats, in
+        SO101 arm frame (degrees, use_degrees=True - see local/robot.py).
+        Returns a (T, JOINT_COUNT) list of lists, also in SO101 arm frame."""
+        model_state = arm_to_model(robot_state)
 
         with torch.inference_mode():
             # MolmoAct2 expects images in [scene, wrist] order.
@@ -49,7 +62,7 @@ class MolmoAct2Policy:
                 processor=self.processor,
                 images=[third_image, wrist_image],
                 task=instruction,
-                state=state,
+                state=model_state,
                 norm_tag=NORM_TAG,
                 inference_action_mode="continuous",
                 enable_depth_reasoning=False,
@@ -64,4 +77,4 @@ class MolmoAct2Policy:
         actions = np.asarray(actions, dtype=np.float32)
         if actions.ndim == 3 and actions.shape[0] == 1:
             actions = actions[0]
-        return actions.tolist()
+        return model_to_arm(actions).tolist()
