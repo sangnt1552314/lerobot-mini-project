@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Logs / PBS output
+*.log
+*.o[0-9]*
+*.e[0-9]*

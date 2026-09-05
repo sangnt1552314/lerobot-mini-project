@@ -1,0 +1,16 @@
+#!/bin/bash
+#PBS -N so101-server
+#PBS -l select=1:ncpus=4:ngpus=1
+#PBS -l walltime=02:00:00
+#PBS -j oe
+
+# NOTE: A GPU is not actually needed for this fake server.
+# ngpus=1 is a placeholder for later, once the real robot policy is loaded here.
+
+cd "$PBS_O_WORKDIR"
+
+# TODO: activate your Python environment here, e.g.:
+# source /path/to/venv/bin/activate
+# or: conda activate my_env
+
+python server/server.py
