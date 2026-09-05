@@ -1,57 +1,104 @@
 # SO101 Remote Inference Prototype (V0)
 
-This is a minimal prototype that only tests **communication** between:
-
-- a local computer with the SO101 robot and two cameras
-- a remote model server running inside an NUS HPC PBS job
-
-**The robot is not moved in this version.** The server returns a fake
-(all-zero) action, and the local client only prints it.
+## WHAT RUNS WHERE
 
 ```
-wrist camera
-      \
-       \
-        -> local/client.py
-       /
-third camera
-      |
-      | HTTP/HTTPS
-      v
+LOCAL SO101 COMPUTER
+--------------------
+local/client.py
+local/cameras.py
+
+NUS HPC PBS COMPUTE NODE
+------------------------
 server/server.py
-      |
-      v
+ngrok tunnel -> localhost:8000
+```
+
+There is only **one** application server: `server/server.py`, running inside
+the PBS job on the HPC compute node. `local/client.py` is a client, not a
+server. ngrok is not a second server either — it is just a tunnel that
+forwards a public HTTPS URL to `server.py` on port 8000.
+
+```
+SO101 PC
+   |
+   | HTTPS
+   v
+https://<ngrok-url>
+   |
+   | ngrok tunnel
+   v
+PBS compute node:8000
+   |
+   v
+server.py
+```
+
+This V0 only tests that communication path. **No robot movement and no real
+model inference happen yet:**
+
+```
+two camera images
++ fake robot state
++ instruction
+        |
+        v
+remote PBS server
+        |
+        v
 fake zero action
-      |
-      v
-printed by client.py
-```
-
-V0 is successful once you see output like this on the local computer, with
-**no robot movement**:
-
-```
-observation=0 latency=12.4 ms actions=[[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], ...]
+        |
+        v
+print locally
 ```
 
 ---
 
-## A. First test everything on one computer
+## Real deployment
 
-This confirms the client and server work before involving the HPC or ngrok.
+### On PBS (NUS HPC)
 
-### Terminal 1 — this is the SERVER (pretend it's the HPC for now)
+Submit the job:
 
 ```bash
-cd so101_remote/server
-pip install -r ../requirements_server.txt
-python server.py
+qsub pbs/run_server.pbs
 ```
 
-Test it's alive:
+The job runs:
 
 ```bash
-curl http://localhost:8000/health
+python server/server.py
+```
+
+The server listens on `0.0.0.0:8000` inside the compute node.
+
+An ngrok agent must be forwarding a public URL to port 8000 on this same
+node. `pbs/run_server.pbs` does **not** start ngrok itself — see the comment
+above the `python server/server.py` line in that file:
+
+- if the `SERVER_URL` you'll use on the local computer already has an active
+  tunnel managed elsewhere (e.g. started by you in another session, or by
+  someone else), you only need this job running `server.py`;
+- if this PBS job is also responsible for the tunnel, you must additionally
+  run an ngrok agent on the same node, forwarding to `localhost:8000`
+  (e.g. `ngrok http 8000`).
+
+For initial debugging, it can be easier to request an **interactive** PBS
+job and run `python server/server.py` manually so you can see errors
+directly.
+
+### On the local SO101 computer
+
+Set the server URL to your ngrok public URL:
+
+```bash
+export SERVER_URL="https://<my-ngrok-url>"
+```
+
+First check the server is reachable:
+
+```bash
+curl "$SERVER_URL/health"
 ```
 
 Expected:
@@ -60,12 +107,19 @@ Expected:
 {"status":"ready"}
 ```
 
-### Terminal 2 — this is the LOCAL COMPUTER
+Then run the client:
 
 ```bash
-cd so101_remote/local
+cd local
 pip install -r ../requirements_local.txt
 python client.py
+```
+
+Expected output (repeats about once per second, Ctrl+C to stop):
+
+```
+observation=0 latency=142.3 ms actions=[[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], ...]
+observation=1 latency=138.9 ms actions=[[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], ...]
 ```
 
 You may need to change the camera IDs in `client.py`:
@@ -74,118 +128,47 @@ You may need to change the camera IDs in `client.py`:
 cameras = CameraManager(0, 1)
 ```
 
-On Linux, you can inspect available camera devices with:
+On Linux, inspect available camera devices with:
 
 ```bash
 ls /dev/video*
 ```
 
-Expected client output (repeats about once per second, Ctrl+C to stop):
-
-```
-observation=0 latency=12.4 ms actions=[[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], ...]
-observation=1 latency=10.1 ms actions=[[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], ...]
-```
+> Before relying on ngrok on NUS HPC, confirm that the compute node can make
+> the required outbound connection and that using a reverse tunnel is
+> permitted by NUS HPC policy.
 
 ---
 
-## B. Test server inside PBS
+## Optional: local-only test (no HPC, no ngrok)
 
-Now move only the server to the HPC. The client keeps running on the local
-computer.
+Useful if you just want to sanity-check the client/server code on one
+machine before touching the HPC at all.
 
-```
-LOCAL COMPUTER:
-client.py
-
-NUS HPC PBS NODE:
-server.py
-```
-
-Submit the job:
+### Terminal 1 — server
 
 ```bash
-qsub pbs/run_server.pbs
+cd server
+pip install -r ../requirements_server.txt
+python server.py
 ```
-
-For initial debugging it is often easier to request an **interactive** PBS
-job instead, and run the server manually so you can see errors directly:
 
 ```bash
-python server/server.py
+curl http://localhost:8000/health
 ```
 
-Note: `pbs/run_server.pbs` has a placeholder to activate your Python
-environment (venv/conda) — edit that before submitting.
+Expected: `{"status":"ready"}`
 
----
+### Terminal 2 — client
 
-## C. Test with ngrok
-
-Once the server runs correctly inside a PBS job, expose it to the local
-computer with ngrok.
-
-```
-SO101 local PC
-      |
-      | HTTPS
-      v
-ngrok public URL
-      |
-      v
-FastAPI :8000
-inside PBS node
-```
-
-On the PBS compute node, after `server.py` is running:
+`SERVER_URL` defaults to `http://localhost:8000` if unset, so you can just
+run:
 
 ```bash
-ngrok http 8000
+cd local
+pip install -r ../requirements_local.txt
+python client.py
 ```
-
-ngrok will print a public URL similar to:
-
-```
-https://xxxx.ngrok.app
-```
-
-Installing/authenticating ngrok depends on your environment (it is not
-assumed to be pre-installed) — follow ngrok's own setup instructions for
-whatever account/token you use.
-
-On the local computer, edit `local/client.py` and change:
-
-```python
-SERVER_URL = "http://localhost:8000"
-```
-
-to:
-
-```python
-SERVER_URL = "https://xxxx.ngrok.app"
-```
-
-Then run:
-
-```bash
-python local/client.py
-```
-
-> **Note:** Before relying on ngrok on NUS HPC, confirm that the compute
-> node can make the required outbound connection and that using a reverse
-> tunnel is permitted by NUS HPC policy.
-
----
-
-## Run order summary
-
-1. **Localhost test** (section A) — client and server both on your local
-   computer.
-2. **PBS server test** (section B) — server moves to an HPC PBS job, client
-   stays local, still connecting over plain HTTP (e.g. via an SSH tunnel or
-   same network).
-3. **ngrok test** (section C) — server on PBS node exposed via ngrok, client
-   connects over the public HTTPS URL.
 
 ---
 

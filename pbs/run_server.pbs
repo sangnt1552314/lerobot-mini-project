@@ -35,6 +35,14 @@ echo "Running on host: $(hostname)"
 echo "GPU info:"
 nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader,nounits || echo "No GPU detected"
 
+# This job only starts the FastAPI app on port 8000. It does NOT start an ngrok
+# tunnel. Two cases:
+#   - If SERVER_URL on the local computer already points to a tunnel that
+#     someone/something else manages (pointing at this node's port 8000),
+#     nothing else is needed here.
+#   - If this job is also responsible for exposing the tunnel, you must also
+#     run an ngrok agent on this node forwarding to localhost:8000, e.g.:
+#       ngrok http 8000
 python server/server.py
 
 EOF
