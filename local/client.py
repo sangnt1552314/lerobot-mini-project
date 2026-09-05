@@ -26,7 +26,7 @@ load_dotenv()
 # export SERVER_URL="https://xxxx.ngrok-free.dev"
 SERVER_URL = os.environ.get("SERVER_URL", "http://localhost:8000")
 
-INSTRUCTION = "just raise the arm, open the gripper, and wave a little bit, then stop"
+INSTRUCTION = "just raise the arm as much as possible, then open the gripper"
 
 # Real SO101 follower connection settings (same values used in
 # scripts/move_follower.py / scripts/teleoperating.sh).
@@ -163,7 +163,7 @@ def main():
         print("MODE: CONTROL")
         print(f"Robot actions may be executed - {EXECUTE_STEPS} steps per chunk, until Ctrl+C.")
 
-    cameras = CameraManager(0, 1)  # (wrist_id, third_person_id) - change if needed
+    cameras = CameraManager(1, 0)  # (wrist_id, third_person_id) - confirmed via scripts/camera_id_check.py
     robot = SO101Robot(FOLLOWER_PORT, FOLLOWER_ID)
 
     print(f"Connecting to follower arm on {FOLLOWER_PORT} ...")
