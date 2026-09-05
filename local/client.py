@@ -8,8 +8,12 @@ import os
 import time
 
 import requests
+from dotenv import load_dotenv
 
 from cameras import CameraManager
+from robot import SO101Robot
+
+load_dotenv()
 
 # Set via `export SERVER_URL=...` before running, e.g.:
 # export SERVER_URL="https://xxxx.ngrok-free.dev"
@@ -17,15 +21,24 @@ SERVER_URL = os.environ.get("SERVER_URL", "http://localhost:8000")
 
 INSTRUCTION = "pick up the red cube"
 
-# Temporary fake SO101 joint state. SO101 has 6 joints (5 arm joints + gripper).
-# Replace this with the real robot joint positions later.
-FAKE_JOINT_POSITIONS = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+# Real SO101 follower connection settings (same values used in
+# scripts/move_follower.py / scripts/teleoperating.sh).
+FOLLOWER_PORT = os.environ["FOLLOWER_PORT"]
+FOLLOWER_ID = os.environ.get("FOLLOWER_ID", "home_follower")
+
+# preview = never sent to motors (this stage always runs in preview mode)
+MODE = "preview"
 
 REQUEST_TIMEOUT_S = 10
 
 
 def main():
     cameras = CameraManager(0, 1)  # (wrist_id, third_person_id) - change if needed
+    robot = SO101Robot(FOLLOWER_PORT, FOLLOWER_ID)
+
+    print(f"Connecting to follower arm on {FOLLOWER_PORT} ...")
+    robot.connect()
+
     observation_id = 0
 
     try:
@@ -33,6 +46,7 @@ def main():
             wrist_frame, third_frame = cameras.capture()
             wrist_jpeg = cameras.encode_jpeg(wrist_frame)
             third_jpeg = cameras.encode_jpeg(third_frame)
+            robot_state = robot.get_state()
 
             files = {
                 "wrist": ("wrist.jpg", wrist_jpeg, "image/jpeg"),
@@ -41,7 +55,7 @@ def main():
             data = {
                 "observation_id": observation_id,
                 "instruction": INSTRUCTION,
-                "joint_positions": json.dumps(FAKE_JOINT_POSITIONS),
+                "joint_positions": json.dumps(robot_state),
             }
 
             start = time.perf_counter()
@@ -56,8 +70,8 @@ def main():
                 response.raise_for_status()
                 result = response.json()
                 print(
-                    f"observation={observation_id} latency={latency_ms:.1f} ms "
-                    f"actions={result['actions']}"
+                    f"observation={observation_id} robot_state={robot_state} "
+                    f"latency={latency_ms:.1f} ms actions={result['actions']} mode={MODE}"
                 )
             except requests.RequestException as e:
                 print(f"observation={observation_id} request failed: {e}")
@@ -69,7 +83,9 @@ def main():
         print("\nStopping (Ctrl+C received)...")
     finally:
         cameras.close()
+        robot.disconnect()
 
 
 if __name__ == "__main__":
     main()
+
