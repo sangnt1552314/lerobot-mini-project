@@ -58,6 +58,32 @@ print locally
 
 ### On PBS (NUS HPC)
 
+#### Server environment (one-time setup)
+
+The server relies on the CUDA-matched `torch` shipped inside the Singularity
+image (`pytorch_2.6.0_cuda_12.8.sif`); it must **not** install its own torch.
+For that to work, the venv has to be created with `--system-site-packages` so
+it can see the container's `torch`/`torchvision`, while `requirements_server.txt`
+(which deliberately omits torch) layers the rest on top.
+
+Create it once, from inside the container:
+
+```bash
+module load singularity
+singularity exec -e --nv \
+  /app1/common/singularity-img/hopper/pytorch/pytorch_2.6.0_cuda_12.8.sif bash
+
+python3.12 -m venv --system-site-packages /scratch/e1583535/virtualenvs/my_lebot
+source /scratch/e1583535/virtualenvs/my_lebot/bin/activate
+pip install -r requirements_server.txt
+
+# sanity check: container torch is visible and CUDA initializes
+python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+```
+
+Do not `pip install torch` or `torchvision` into this venv — a mismatched
+CUDA build (e.g. cu130 on a CUDA 12.9 driver) will break `torch.cuda` init.
+
 Submit the job:
 
 ```bash

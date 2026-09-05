@@ -58,7 +58,10 @@ class MolmoAct2Policy:
                 enable_cuda_graph=False,
             )
 
-        actions = np.asarray(out.actions, dtype=np.float32)
+        actions = out.actions
+        if isinstance(actions, torch.Tensor):
+            actions = actions.detach().to("cpu", torch.float32)
+        actions = np.asarray(actions, dtype=np.float32)
         if actions.ndim == 3 and actions.shape[0] == 1:
             actions = actions[0]
         return actions.tolist()
