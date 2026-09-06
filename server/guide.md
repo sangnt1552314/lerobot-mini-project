@@ -36,7 +36,18 @@ source /scratch/e1583535/virtualenvs/my_lebot/bin/activate
 python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
 ```
 
-## 4. Start the server + tunnel
+## 4. Install ngrok (one-time)
+
+```bash
+mkdir -p ~/bin
+cd ~/bin
+
+curl -fsSL https://bin.ngrok.com/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz | tar -xz
+
+./ngrok version
+```
+
+## 5. Start the server + tunnel
 
 ```bash
 cd /scratch/e1583535/projects/lerobot-mini-project/server
@@ -52,7 +63,7 @@ foreground. Watch the log live in another shell with:
 tail -f server.log
 ```
 
-## 5. Health check
+## 6. Health check
 
 ```bash
 curl http://localhost:8000/health   # expect: {"status":"ready"}
