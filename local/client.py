@@ -26,7 +26,7 @@ load_dotenv()
 # export SERVER_URL="https://xxxx.ngrok-free.dev"
 SERVER_URL = os.environ.get("SERVER_URL", "http://localhost:8000")
 
-INSTRUCTION = "just raise the arm as much as possible, then open the gripper"
+INSTRUCTION = "grab the white object on the table and place to the right 1cm"
 
 # Real SO101 follower connection settings (same values used in
 # scripts/move_follower.py / scripts/teleoperating.sh).

@@ -14,6 +14,8 @@ used as the inference.py defaults in the reference repo above
 callers only ever see SO101 arm-frame values in and out.
 """
 
+import os
+
 import numpy as np
 import torch
 from huggingface_hub import snapshot_download
@@ -21,6 +23,11 @@ from transformers import AutoModelForImageTextToText, AutoProcessor
 
 REPO_ID = "allenai/MolmoAct2-SO100_101"
 NORM_TAG = "so100_so101_molmoact2"
+
+# Diagnostic: MolmoAct2-SO100_101 was trained on two third-person views, not a
+# wrist view - set SCENE_ONLY=1 on the server to pass the third-person frame
+# twice (skip the wrist frame) and check if that changes prediction quality.
+SCENE_ONLY = os.environ.get("SCENE_ONLY") == "1"
 
 # [shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper]
 JOINT_OFFSETS = np.array([0.0, 90.0, 90.0, 0.0, 0.0, 0.0], dtype=np.float32)
@@ -39,6 +46,7 @@ class MolmoAct2Policy:
     def __init__(self, device="cuda", dtype=torch.bfloat16, num_steps=10):
         local_dir = snapshot_download(REPO_ID)
         print(f"[MolmoAct2] Loading {REPO_ID} from {local_dir} (dtype={dtype}, device={device}) ...")
+        print(f"[MolmoAct2] SCENE_ONLY={SCENE_ONLY} (wrist frame {'ignored' if SCENE_ONLY else 'used'})")
         self.processor = AutoProcessor.from_pretrained(local_dir, trust_remote_code=True)
         self.model = (
             AutoModelForImageTextToText.from_pretrained(
@@ -55,12 +63,13 @@ class MolmoAct2Policy:
         SO101 arm frame (degrees, use_degrees=True - see local/robot.py).
         Returns a (T, JOINT_COUNT) list of lists, also in SO101 arm frame."""
         model_state = arm_to_model(robot_state)
+        images = [third_image, third_image] if SCENE_ONLY else [third_image, wrist_image]
 
         with torch.inference_mode():
             # MolmoAct2 expects images in [scene, wrist] order.
             out = self.model.predict_action(
                 processor=self.processor,
-                images=[third_image, wrist_image],
+                images=images,
                 task=instruction,
                 state=model_state,
                 norm_tag=NORM_TAG,
