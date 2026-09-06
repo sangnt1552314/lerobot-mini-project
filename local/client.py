@@ -26,7 +26,7 @@ load_dotenv()
 # export SERVER_URL="https://xxxx.ngrok-free.dev"
 SERVER_URL = os.environ.get("SERVER_URL", "http://localhost:8000")
 
-INSTRUCTION = "grab the white object on the table and place to the right 1cm"
+INSTRUCTION = "pick up the block"
 
 # Real SO101 follower connection settings (same values used in
 # scripts/move_follower.py / scripts/teleoperating.sh).
@@ -41,6 +41,11 @@ EXECUTE_STEPS = 4
 # Local pacing between executed actions within a chunk (seconds).
 STEP_DELAY_S = 0.1
 
+# Debug: set SAVE_FRAMES=1 to overwrite local/debug_frames/wrist.jpg and
+# third.jpg each request - lets you see exactly what the model receives.
+SAVE_FRAMES = os.environ.get("SAVE_FRAMES") == "1"
+DEBUG_FRAMES_DIR = os.path.join(os.path.dirname(__file__), "debug_frames")
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -54,6 +59,13 @@ def capture_and_request(cameras, robot, observation_id):
     wrist_jpeg = cameras.encode_jpeg(wrist_frame)
     third_jpeg = cameras.encode_jpeg(third_frame)
     robot_state = robot.get_state()
+
+    if SAVE_FRAMES:
+        os.makedirs(DEBUG_FRAMES_DIR, exist_ok=True)
+        with open(os.path.join(DEBUG_FRAMES_DIR, "wrist.jpg"), "wb") as f:
+            f.write(wrist_jpeg)
+        with open(os.path.join(DEBUG_FRAMES_DIR, "third.jpg"), "wb") as f:
+            f.write(third_jpeg)
 
     files = {
         "wrist": ("wrist.jpg", wrist_jpeg, "image/jpeg"),
