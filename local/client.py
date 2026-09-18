@@ -28,6 +28,11 @@ SERVER_URL = os.environ.get("SERVER_URL", "http://localhost:8000")
 
 INSTRUCTION = "pick up the block"
 
+# Which server-side model to run. Override without touching code, e.g.:
+# export MODEL_REPO_ID="tsangb34/molmoact2-so101-soccer-red_bowl-40episodes"
+# Empty/unset -> the server's default (allenai/MolmoAct2-SO100_101).
+MODEL_REPO_ID = os.environ.get("MODEL_REPO_ID", "")
+
 # Real SO101 follower connection settings (same values used in
 # scripts/move_follower.py / scripts/teleoperating.sh).
 FOLLOWER_PORT = os.environ["FOLLOWER_PORT"]
@@ -76,6 +81,8 @@ def capture_and_request(cameras, robot, observation_id):
         "instruction": INSTRUCTION,
         "joint_positions": json.dumps(robot_state),
     }
+    if MODEL_REPO_ID:
+        data["model_repo_id"] = MODEL_REPO_ID
 
     start = time.perf_counter()
     response = requests.post(

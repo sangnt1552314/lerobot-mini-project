@@ -1,72 +1,32 @@
-# SO101 Remote Inference Prototype (V0)
+# SO101 Remote Inference
 
-## WHAT RUNS WHERE
-
-```
-LOCAL SO101 COMPUTER
---------------------
-local/client.py
-local/cameras.py
-
-NUS HPC PBS COMPUTE NODE
-------------------------
-server/server.py
-ngrok tunnel -> localhost:8000
-```
-
-There is only **one** application server: `server/server.py`, running inside
-the PBS job on the HPC compute node. `local/client.py` is a client, not a
-server. ngrok is not a second server either — it is just a tunnel that
-forwards a public HTTPS URL to `server.py` on port 8000.
+Run a MolmoAct2 policy on the NUS HPC while the SO101 arm and cameras stay on
+the local computer.
 
 ```
-SO101 PC
+SO101 PC (local/client.py)
    |
-   | HTTPS
+   | HTTPS via ngrok tunnel
    v
-https://<ngrok-url>
-   |
-   | ngrok tunnel
-   v
-PBS compute node:8000
-   |
-   v
-server.py
+PBS compute node:8000 (server/server.py)
 ```
 
-This V0 only tests that communication path. **No robot movement and no real
-model inference happen yet:**
+`server/server.py` is the only server. `local/client.py` is the client. ngrok
+is just a tunnel that forwards a public HTTPS URL to port 8000 on the node.
 
-```
-two camera images
-+ fake robot state
-+ instruction
-        |
-        v
-remote PBS server
-        |
-        v
-fake zero action
-        |
-        v
-print locally
-```
+The client captures two camera frames + arm state + an instruction, sends them
+to the server, receives an action chunk, and (in control mode) executes it with
+local safety checks.
 
 ---
 
-## Real deployment
+## Server (NUS HPC)
 
-### On PBS (NUS HPC)
+### One-time environment setup
 
-#### Server environment (one-time setup)
-
-The server relies on the CUDA-matched `torch` shipped inside the Singularity
-image (`pytorch_2.6.0_cuda_12.8.sif`); it must **not** install its own torch.
-For that to work, the venv has to be created with `--system-site-packages` so
-it can see the container's `torch`/`torchvision`, while `requirements_server.txt`
-(which deliberately omits torch) layers the rest on top.
-
-Create it once, from inside the container:
+The server uses the CUDA-matched `torch` inside the Singularity image, so the
+venv must be created with `--system-site-packages` and must **not** install its
+own torch. `requirements_server.txt` omits torch on purpose.
 
 ```bash
 module load singularity
@@ -81,132 +41,81 @@ pip install -r requirements_server.txt
 python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
 ```
 
-Do not `pip install torch` or `torchvision` into this venv — a mismatched
-CUDA build (e.g. cu130 on a CUDA 12.9 driver) will break `torch.cuda` init.
+Do not `pip install torch` or `torchvision` into this venv.
 
-Submit the job:
+### Run
 
 ```bash
 qsub pbs/run_server.pbs
 ```
 
-The job runs:
+The job runs `python server/server.py`, listening on `0.0.0.0:8000`. It does
+**not** start ngrok. If this job also owns the tunnel, run an ngrok agent on the
+same node forwarding to `localhost:8000` (`ngrok http 8000`).
 
-```bash
-python server/server.py
-```
+For debugging, request an interactive PBS job and run `python server/server.py`
+manually to see errors directly.
 
-The server listens on `0.0.0.0:8000` inside the compute node.
+---
 
-An ngrok agent must be forwarding a public URL to port 8000 on this same
-node. `pbs/run_server.pbs` does **not** start ngrok itself — see the comment
-above the `python server/server.py` line in that file:
-
-- if the `SERVER_URL` you'll use on the local computer already has an active
-  tunnel managed elsewhere (e.g. started by you in another session, or by
-  someone else), you only need this job running `server.py`;
-- if this PBS job is also responsible for the tunnel, you must additionally
-  run an ngrok agent on the same node, forwarding to `localhost:8000`
-  (e.g. `ngrok http 8000`).
-
-For initial debugging, it can be easier to request an **interactive** PBS
-job and run `python server/server.py` manually so you can see errors
-directly.
-
-### On the local SO101 computer
-
-Set the server URL to your ngrok public URL:
+## Client (local SO101 computer)
 
 ```bash
 export SERVER_URL="https://<my-ngrok-url>"
+export FOLLOWER_PORT="/dev/ttyACM0"        # your SO101 follower port
 ```
 
-First check the server is reachable:
+Check the server is reachable:
 
 ```bash
-curl "$SERVER_URL/health"
+curl "$SERVER_URL/health"     # -> {"status":"ready"}
 ```
 
-Expected:
-
-```json
-{"status":"ready"}
-```
-
-Then run the client:
+Install and run:
 
 ```bash
 cd local
 pip install -r ../requirements_local.txt
-python client.py
+python client.py --mode preview     # print actions only, never moves the arm
+python client.py --mode control     # execute actions with local safety checks
 ```
 
-Expected output (repeats about once per second, Ctrl+C to stop):
+### Optional environment variables
 
-```
-observation=0 latency=142.3 ms actions=[[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], ...]
-observation=1 latency=138.9 ms actions=[[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], ...]
-```
+| Variable        | Default                 | Purpose                                             |
+| --------------- | ----------------------- | --------------------------------------------------- |
+| `SERVER_URL`    | `http://localhost:8000` | Server / ngrok URL.                                 |
+| `FOLLOWER_PORT` | required                | SO101 follower serial port.                         |
+| `FOLLOWER_ID`   | `home_follower`         | Follower identifier.                                |
+| `MODEL_REPO_ID` | server default          | Choose the model to run, e.g. a fine-tuned repo.    |
+| `SAVE_FRAMES`   | unset                   | `1` saves the sent frames to `local/debug_frames/`. |
 
-You may need to change the camera IDs in `client.py`:
-
-```python
-cameras = CameraManager(0, 1)
-```
-
-On Linux, inspect available camera devices with:
+Example: run a fine-tuned model instead of the server default.
 
 ```bash
-ls /dev/video*
+export MODEL_REPO_ID="tsangb34/molmoact2-so101-soccer-red_bowl-40episodes"
+python client.py --mode preview
 ```
 
-> Before relying on ngrok on NUS HPC, confirm that the compute node can make
-> the required outbound connection and that using a reverse tunnel is
-> permitted by NUS HPC policy.
+Camera IDs are set in `client.py` (`CameraManager(wrist_id, third_id)`). On
+Linux, list devices with `ls /dev/video*`.
 
 ---
 
-## Optional: local-only test (no HPC, no ngrok)
+## Local-only test (no HPC, no ngrok)
 
-Useful if you just want to sanity-check the client/server code on one
-machine before touching the HPC at all.
-
-### Terminal 1 — server
+Sanity-check the client/server on one machine. `SERVER_URL` defaults to
+`http://localhost:8000`.
 
 ```bash
-cd server
-pip install -r ../requirements_server.txt
-python server.py
-```
+# terminal 1
+cd server && pip install -r ../requirements_server.txt && python server.py
 
-```bash
-curl http://localhost:8000/health
-```
-
-Expected: `{"status":"ready"}`
-
-### Terminal 2 — client
-
-`SERVER_URL` defaults to `http://localhost:8000` if unset, so you can just
-run:
-
-```bash
-cd local
-pip install -r ../requirements_local.txt
-python client.py
+# terminal 2
+cd local && pip install -r ../requirements_local.txt && python client.py
 ```
 
 ---
 
-## What comes later
-
-After this communication test works, the next steps will be:
-
-1. replace dummy joint state with real SO101 state
-2. replace fake action with model inference
-3. add local robot safety checks
-4. only then execute actions
-5. optionally move from simple HTTP requests to a persistent connection if
-   latency becomes a problem
-
-None of these are implemented yet.
+> Before relying on ngrok on NUS HPC, confirm the compute node can make the
+> required outbound connection and that reverse tunnels are permitted by policy.

@@ -18,7 +18,6 @@ mkdir -p $LOG_DIR
 
 singularity exec -e --nv \
 --env HF_HOME=/scratch/e1583535/cache \
---env HF_HUB_OFFLINE=1 \
 --env TMPDIR=/scratch/e1583535/tmp \
 --env TEMP=/scratch/e1583535/tmp \
 --env TMP=/scratch/e1583535/tmp \

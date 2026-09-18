@@ -14,13 +14,20 @@ import uvicorn
 from fastapi import FastAPI, File, Form, UploadFile
 from PIL import Image
 
-from policy import MolmoAct2Policy
+from policy import MolmoAct2Policy, DEFAULT_REPO_ID
 
 app = FastAPI()
 
-# Loaded on first /infer request (not at import time) so `python server.py`
-# and `/health` stay fast even before the model/GPU is touched.
-policy = None
+# One loaded policy per model repo id, built on first request for that repo
+# (not at import time) so `python server.py` and `/health` stay fast even
+# before the model/GPU is touched. Switching models keeps earlier ones cached.
+policies = {}
+
+
+def get_policy(repo_id):
+    if repo_id not in policies:
+        policies[repo_id] = MolmoAct2Policy(repo_id=repo_id)
+    return policies[repo_id]
 
 
 @app.get("/health")
@@ -35,10 +42,9 @@ async def infer(
     joint_positions: str = Form(...),
     instruction: str = Form(...),
     observation_id: int = Form(...),
+    model_repo_id: str = Form(DEFAULT_REPO_ID),
 ):
-    global policy
-    if policy is None:
-        policy = MolmoAct2Policy()
+    policy = get_policy(model_repo_id)
 
     start = time.perf_counter()
 
@@ -50,6 +56,7 @@ async def infer(
         f"request={observation_id} wrist={len(wrist_bytes)} bytes "
         f"third={len(third_bytes)} bytes"
     )
+    print(f"model={model_repo_id}")
     print(f"joints={joints}")
     print(f"instruction={instruction}")
 

@@ -21,7 +21,7 @@ import torch
 from huggingface_hub import snapshot_download
 from transformers import AutoModelForImageTextToText, AutoProcessor
 
-REPO_ID = "allenai/MolmoAct2-SO100_101"
+DEFAULT_REPO_ID = "allenai/MolmoAct2-SO100_101"
 NORM_TAG = "so100_so101_molmoact2"
 
 # Diagnostic: MolmoAct2-SO100_101 was trained on two third-person views, not a
@@ -43,9 +43,10 @@ def model_to_arm(actions):
 
 
 class MolmoAct2Policy:
-    def __init__(self, device="cuda", dtype=torch.bfloat16, num_steps=10):
-        local_dir = snapshot_download(REPO_ID)
-        print(f"[MolmoAct2] Loading {REPO_ID} from {local_dir} (dtype={dtype}, device={device}) ...")
+    def __init__(self, repo_id=DEFAULT_REPO_ID, device="cuda", dtype=torch.bfloat16, num_steps=10):
+        self.repo_id = repo_id
+        local_dir = snapshot_download(repo_id)
+        print(f"[MolmoAct2] Loading {repo_id} from {local_dir} (dtype={dtype}, device={device}) ...")
         print(f"[MolmoAct2] SCENE_ONLY={SCENE_ONLY} (wrist frame {'ignored' if SCENE_ONLY else 'used'})")
         self.processor = AutoProcessor.from_pretrained(local_dir, trust_remote_code=True)
         self.model = (
