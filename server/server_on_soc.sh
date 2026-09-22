@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-export HF_HOME=${HOME_PATH}/cache
+export HF_HOME=$HOME/cache
 
 # Run from this script's directory so server.py and server.log resolve here.
 cd "$(dirname "$0")"
