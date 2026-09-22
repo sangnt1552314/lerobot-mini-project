@@ -221,3 +221,5 @@ __marimo__/
 *.log
 *.o[0-9]*
 *.e[0-9]*
+
+debug_frames/

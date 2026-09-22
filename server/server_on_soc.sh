@@ -21,6 +21,35 @@ mkdir -p "$TMPDIR"
 # Run from this script's directory so server.py and server.log resolve here.
 cd "$(dirname "$0")"
 
+PORT=8000
+
+# Free the port if a previous run is still holding it, otherwise uvicorn dies
+# with "[Errno 98] address already in use".
+free_port() {
+    local port=$1 pids=""
+
+    if command -v lsof >/dev/null 2>&1; then
+        pids=$(lsof -t -i :"$port" -sTCP:LISTEN 2>/dev/null || true)
+    elif command -v fuser >/dev/null 2>&1; then
+        pids=$(fuser -n tcp "$port" 2>/dev/null || true)
+    elif command -v ss >/dev/null 2>&1; then
+        pids=$(ss -lptnH "sport = :$port" 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 || true)
+    fi
+
+    [ -z "$pids" ] && return 0
+
+    echo "Port $port in use by PID(s): $pids -- killing"
+    kill $pids 2>/dev/null || true
+    for _ in $(seq 10); do
+        sleep 0.5
+        kill -0 $pids 2>/dev/null || return 0
+    done
+    kill -9 $pids 2>/dev/null || true
+    sleep 1
+}
+
+free_port "$PORT"
+
 python server.py > server.log 2>&1 &
 
-~/bin/ngrok http 8000
+~/bin/ngrok http "$PORT"

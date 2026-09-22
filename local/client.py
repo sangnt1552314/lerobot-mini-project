@@ -38,7 +38,7 @@ MODEL_REPO_ID = os.environ.get("MODEL_REPO_ID", "")
 FOLLOWER_PORT = os.environ["FOLLOWER_PORT"]
 FOLLOWER_ID = os.environ.get("FOLLOWER_ID", "home_follower")
 
-REQUEST_TIMEOUT_S = 10
+REQUEST_TIMEOUT_S = 300
 
 # Stage 7: execute only the first N actions of each returned chunk (not the
 # whole ~30-step chunk) before requesting a fresh observation/chunk.
