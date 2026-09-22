@@ -14,7 +14,7 @@
 # otherwise runs until the walltime is hit.
 # ---------------------------------------------------------------------------
 
-ENV_NAME="py312"
+ENV_NAME="venv/py312"
 HOME_PATH="/home/n/ntasang"
 PROJECT_PATH="${HOME_PATH}/projects/lerobot-mini-project"
 
