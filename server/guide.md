@@ -58,7 +58,7 @@ srun --gres=gpu:h100-47:1 --time=02:00:00 --cpus-per-task=8 --mem=100G --pty bas
 ### 2. Activate the venv and set caches
 
 ```bash
-source ~/py312/bin/activate
+source ~/venvs/py312/bin/activate
 cd ~/projects/lerobot-mini-project
 
 export HF_HOME=$HOME/cache
