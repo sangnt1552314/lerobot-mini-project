@@ -223,3 +223,6 @@ __marimo__/
 *.e[0-9]*
 
 debug_frames/
+
+# ACT training runs from sim/train_act.sh
+/outputs/

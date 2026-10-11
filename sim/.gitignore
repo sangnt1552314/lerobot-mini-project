@@ -1,0 +1,6 @@
+# Local settings, downloaded code/assets and generated artifacts
+.env
+third_party/
+data/
+debug/
+datasets/

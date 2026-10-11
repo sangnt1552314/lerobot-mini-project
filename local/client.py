@@ -27,7 +27,7 @@ load_dotenv()
 # export SERVER_URL="https://xxxx.ngrok-free.dev"
 SERVER_URL = os.environ.get("SERVER_URL", "http://localhost:8000")
 
-INSTRUCTION = "grab the white bowl"
+INSTRUCTION = "grab the blue cube"
 
 # Which server-side model to run. Override without touching code, e.g.:
 # export MODEL_REPO_ID="tsangb34/molmoact2-so101-soccer-red_bowl-40episodes"
