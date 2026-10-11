@@ -1,0 +1,23 @@
+#!/bin/bash
+#PBS -P CFP05-CF-002
+#PBS -j oe
+#PBS -k oed
+#PBS -N lerobot-act-setup-env
+#PBS -q auto
+#PBS -l select=1:ngpus=1:ncpus=8
+#PBS -l walltime=01:00:00
+
+# One-time setup of the LeRobot 0.4.2 ACT training env (see sim/setup_hpc_train.sh).
+# Submit from the repository root:  qsub pbs/setup_act_env.pbs
+# Needs internet on the compute node. If the log says "NO ACCESS", run
+# `bash sim/setup_hpc_train.sh` on the login node instead (the GPU check is then skipped/fails
+# there; re-run this job afterwards to verify on a GPU: finished steps are skipped).
+
+cd $PBS_O_WORKDIR
+
+module load singularity
+
+LOG_DIR='./logs/setup_act_env'
+mkdir -p $LOG_DIR
+
+bash sim/setup_hpc_train.sh > $LOG_DIR/stdout.$PBS_JOBID.log 2> $LOG_DIR/stderr.$PBS_JOBID.log

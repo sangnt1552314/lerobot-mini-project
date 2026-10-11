@@ -1,0 +1,9 @@
+# Keep the Singularity image's CUDA build of torch/torchvision and its numpy 1.x.
+# Replaces the image's own /etc/pip/constraint.txt (which pins packaging==23.2, too old for LeRobot).
+# Must match pytorch_2.7.0_cuda_12.8.sif; sim/setup_hpc_train.sh checks this.
+torch==2.7.0a0+7c8ec84dab.nv25.3
+torchvision==0.22.0a0
+numpy==1.26.4
+# pyarrow>=22 requires numpy>=2; keep the image's 19.0.1. This makes pip choose datasets 4.0.0
+# (datasets 4.1 needs pyarrow>=21); LeRobot 0.4.2 accepts datasets>=4.0.0,<4.2.0.
+pyarrow==19.0.1

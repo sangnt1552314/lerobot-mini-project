@@ -1,0 +1,48 @@
+#!/bin/bash
+#PBS -P CFP05-CF-002
+#PBS -j oe
+#PBS -k oed
+#PBS -N lerobot-act-test-h200
+#PBS -q auto
+#PBS -l select=1:ngpus=1
+#PBS -l walltime=01:00:00
+
+# Test job for the H200 ACT training path, on the SYNTHETIC stand-in dataset:
+#   node facts -> synthetic dataset (created once) -> end-to-end smoke test -> throughput benchmark.
+# Submit from the repository root:  qsub pbs/test_act_h200.pbs
+# Results: logs/test_act_h200/<jobid>.log, logs/bench_act/<jobid>/summary.md
+# PBS gives every GPU 12 CPUs and 225 GB (a hook overrides larger ncpus/mem requests).
+
+cd $PBS_O_WORKDIR
+set -o pipefail
+
+module load singularity
+
+SYNTH_ID=local/synthetic_liftcube_smoke
+SYNTH_ROOT=/scratch/e1583535/datasets/lerobot/$SYNTH_ID
+LOG_DIR='./logs/test_act_h200'
+mkdir -p $LOG_DIR
+export NCPUS="${NCPUS:-12}"
+
+{
+echo "==== node facts ($(date))"
+echo "host $(hostname)  NCPUS=$NCPUS  nproc=$(nproc)  TMPDIR=${TMPDIR:-unset}"
+nvidia-smi --query-gpu=name,memory.total,driver_version,power.limit --format=csv
+free -g | head -2
+df -h /tmp /dev/shm /scratch ${TMPDIR:-} 2>/dev/null | sort -u
+lscpu | grep -E "Model name|^CPU\(s\)"
+
+if [ ! -f "$SYNTH_ROOT/meta/info.json" ]; then
+    echo "==== creating SYNTHETIC dataset $SYNTH_ROOT"
+    mkdir -p "$(dirname "$SYNTH_ROOT")"
+    bash sim/hpc_env.sh python sim/tools/make_synthetic_dataset.py --root "$SYNTH_ROOT" --repo-id $SYNTH_ID \
+        --episodes 20 --frames 200 2>&1 | grep -v "^Svt\|Map:" || exit 1
+fi
+du -sh "$SYNTH_ROOT"
+
+echo "==== smoke test"
+DATASET_REPO_ID=$SYNTH_ID DATASET_ROOT=$SYNTH_ROOT bash sim/tools/smoke_act_hpc.sh || exit 1
+
+echo "==== throughput benchmark"
+DATASET_REPO_ID=$SYNTH_ID DATASET_ROOT=$SYNTH_ROOT bash sim/tools/bench_act_hpc.sh "./logs/bench_act/$PBS_JOBID"
+} > $LOG_DIR/$PBS_JOBID.log 2>&1

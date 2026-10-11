@@ -1,0 +1,28 @@
+# LeRobot 0.4.2 runtime deps for ACT training on the HPC (installed by sim/setup_hpc_train.sh).
+# lerobot itself is installed with --no-deps on top of this list, because:
+#  - torch / torchvision come from the Singularity image (pytorch_2.7.0_cuda_12.8.sif) and must
+#    not be replaced; they are pinned via sim/constraints_hpc_train.txt.
+#  - rerun-sdk is left out: every version LeRobot 0.4.2 allows (0.24-0.26) requires numpy>=2, but the
+#    container's torch is built against numpy 1.x. rerun is only used for visualisation
+#    (record/teleop/dataset-viz), not by lerobot-train or ACT inference.
+#  - opencv-python-headless is capped <4.12 because 4.12 requires numpy>=2, and pyarrow is pinned to
+#    the image's 19.0.1 in the constraints file (newer pyarrow requires numpy>=2), which selects datasets 4.0.0.
+datasets>=4.0.0,<4.2.0
+diffusers>=0.27.2,<0.36.0
+huggingface-hub[cli,hf-transfer]>=0.34.2,<0.36.0
+accelerate>=1.10.0,<2.0.0
+setuptools>=71.0.0,<81.0.0
+cmake>=3.29.0.1,<4.2.0
+einops>=0.8.0,<0.9.0
+opencv-python-headless>=4.9.0,<4.12.0
+av>=15.0.0,<16.0.0
+jsonlines>=4.0.0,<5.0.0
+packaging>=24.2,<26.0
+pynput>=1.7.7,<1.9.0
+pyserial>=3.5,<4.0
+wandb>=0.20.0,<0.22.0
+draccus==0.10.0
+gymnasium>=1.1.1,<2.0.0
+deepdiff>=7.0.1,<9.0.0
+imageio[ffmpeg]>=2.34.0,<3.0.0
+termcolor>=2.4.0,<4.0.0

@@ -226,3 +226,4 @@ debug_frames/
 
 # ACT training runs from sim/train_act.sh
 /outputs/
+logs/

@@ -1,0 +1,28 @@
+#!/bin/bash
+#PBS -P CFP05-CF-002
+#PBS -j oe
+#PBS -k oed
+#PBS -N lerobot-act-train-h200
+#PBS -q auto
+#PBS -l select=1:ngpus=1
+#PBS -l walltime=06:00:00
+
+# Train ACT on one H200 (all settings are sim/train_act_hpc.sh environment variables, pass them with -v).
+# Submit from the repository root:
+#   qsub pbs/train_act_h200.pbs                                         # defaults (see train_act_hpc.sh)
+#   qsub -v STEPS=20000,BATCH_SIZE=8,OUTPUT_DIR=outputs/act_liftcube_h200 pbs/train_act_h200.pbs
+#   qsub -v RESUME=1,STEPS=40000 pbs/train_act_h200.pbs                 # continue the same OUTPUT_DIR
+#   qsub -W depend=afterany:<jobid> -v RESUME=1,STEPS=20000 pbs/train_act_h200.pbs   # chain after walltime
+# Log: logs/train_act_h200/<jobid>.log, GPU/CPU usage: logs/train_act_h200/<jobid>.usage.csv
+# PBS gives every GPU 12 CPUs and 225 GB (a hook overrides larger ncpus/mem requests).
+
+cd $PBS_O_WORKDIR
+
+module load singularity
+
+LOG_DIR='./logs/train_act_h200'
+mkdir -p $LOG_DIR
+export NCPUS="${NCPUS:-12}"
+export USAGE_CSV="${USAGE_CSV:-$PWD/$LOG_DIR/$PBS_JOBID.usage.csv}"
+
+bash sim/train_act_hpc.sh "${STEPS:-20000}" > $LOG_DIR/$PBS_JOBID.log 2>&1
