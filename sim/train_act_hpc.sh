@@ -22,6 +22,9 @@
 #                    (read from the gitignored repo-root .env if present; offline automatically without
 #                    credentials or when api.wandb.ai is unreachable)
 #   USAGE_CSV        if set, sample GPU util / CPU cores of the run into this CSV
+#   KEEP_CHECKPOINTS [2] keep only the newest N checkpoints/<step> dirs (0 = keep all). LeRobot has no
+#                    such option, so older ones are deleted while training runs and once at the end;
+#                    the one `last` points to is never deleted.
 # Extra arguments after STEPS go straight to lerobot-train. SIMULATION DATA ONLY.
 
 set -euo pipefail
@@ -67,6 +70,8 @@ WANDB_PROJECT="${WANDB_PROJECT:-cs6283}"
 WANDB_ENTITY="${WANDB_ENTITY:-}"
 RESUME="${RESUME:-0}"
 USAGE_CSV="${USAGE_CSV:-}"
+KEEP_CHECKPOINTS="${KEEP_CHECKPOINTS:-2}"
+[[ "$KEEP_CHECKPOINTS" =~ ^[0-9]+$ ]] || die "KEEP_CHECKPOINTS must be a non-negative integer"
 
 # ---- run inside the container ---------------------------------------------------------------
 if [ -z "${SINGULARITY_CONTAINER:-}${APPTAINER_CONTAINER:-}" ]; then
@@ -76,7 +81,7 @@ if [ -z "${SINGULARITY_CONTAINER:-}${APPTAINER_CONTAINER:-}" ]; then
     FWD=()
     for v in SCRATCH_ROOT VENV FFMPEG_PREFIX DATASET_REPO_ID DATASET_ROOT OUTPUT_DIR JOB_NAME BATCH_SIZE \
              SAVE_FREQ LOG_FREQ NCPUS NUM_WORKERS VIDEO_BACKEND MIXED_PRECISION STAGE_DATASET STAGE_DIR \
-             WANDB_ENABLE WANDB_ENTITY WANDB_PROJECT WANDB_API_KEY RESUME USAGE_CSV PBS_JOBID; do
+             WANDB_ENABLE WANDB_ENTITY WANDB_PROJECT WANDB_API_KEY RESUME USAGE_CSV KEEP_CHECKPOINTS PBS_JOBID; do
         [ -n "${!v+x}" ] && FWD+=(--env "$v=${!v}")
     done
     FWD+=(--env "SCRATCH_ROOT=$SCRATCH" --env "NCPUS=$NCPUS" --env "NUM_WORKERS=$NUM_WORKERS")
@@ -166,15 +171,33 @@ else
         "$@")
 fi
 
+# Delete all but the newest KEEP_CHECKPOINTS checkpoints/<step> dirs. The newest dir may still be
+# being written, and the dir `last` points to is skipped, so a resumable checkpoint always survives.
+prune_checkpoints() {
+    local dir="$OUTPUT_DIR/checkpoints" last="" steps=() i
+    [ "$KEEP_CHECKPOINTS" -gt 0 ] && [ -d "$dir" ] || return 0
+    [ -L "$dir/last" ] && last="$(basename "$(readlink "$dir/last")")"
+    mapfile -t steps < <(find "$dir" -mindepth 1 -maxdepth 1 -type d -regex '.*/[0-9]+' -printf '%f\n' | sort -n)
+    for (( i = 0; i < ${#steps[@]} - KEEP_CHECKPOINTS; i++ )); do
+        [ "${steps[i]}" = "$last" ] && continue
+        info "Removing old checkpoint ${steps[i]} (keeping newest $KEEP_CHECKPOINTS)"
+        rm -rf "${dir:?}/${steps[i]}"
+    done
+}
+
 echo "[train-hpc] $(printf '%q ' "${CMD[@]}")"
 "${CMD[@]}" &
 TRAIN_PID=$!
 if [ -n "$USAGE_CSV" ]; then
     python "$REPO_ROOT/sim/tools/monitor_usage.py" --pid "$TRAIN_PID" --out "$USAGE_CSV" &
 fi
+if [ "$KEEP_CHECKPOINTS" -gt 0 ]; then
+    ( while kill -0 "$TRAIN_PID" 2>/dev/null; do prune_checkpoints; sleep 60; done ) &
+fi
 status=0
 wait "$TRAIN_PID" || status=$?
 wait || true
+prune_checkpoints
 [ "$status" = "0" ] || die "lerobot-train exited with status $status"
 
 if [[ " $* " != *" --save_checkpoint=false "* ]]; then

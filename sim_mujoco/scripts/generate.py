@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from so101_liftcube import JOINTS, ROBOT_TYPE, TASK, LiftCubeConfig, LiftCubeEnv, ScriptedLiftExpert  # noqa: E402
+from so101_liftcube import JOINTS, ROBOT_TYPE, TASK, LiftCubeConfig, LiftCubeEnv, make_config, ScriptedLiftExpert  # noqa: E402
 
 
 def features(cfg: LiftCubeConfig) -> dict:
@@ -43,6 +43,8 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--max_attempts", type=int, default=None, help="default 3*N+10")
     ap.add_argument("--image_writer_threads", type=int, default=8)
+    ap.add_argument("--profile", choices=["default", "real"], default="default",
+                    help="real = matched to the physical setup (start pose, camera, textures, randomization)")
     args = ap.parse_args()
 
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -51,7 +53,7 @@ def main() -> None:
     root = Path(args.root) if args.root else HF_LEROBOT_HOME / args.repo_id
     if root.exists():
         sys.exit(f"{root} already exists; delete it or choose another --root/--repo_id.")
-    cfg = LiftCubeConfig()
+    cfg = make_config(args.profile)
     env = LiftCubeEnv(cfg, render=True)
     expert = ScriptedLiftExpert(env)
     ds = LeRobotDataset.create(repo_id=args.repo_id, fps=cfg.fps, features=features(cfg), root=root,

@@ -1,8 +1,10 @@
 """Run a trained LeRobot ACT checkpoint in-process (no Isaac imports, so it is testable alone).
 
-Uses the same LeRobot 0.4.2 code path as lerobot-record: ACTPolicy.from_pretrained, the
-pre/post-processors saved next to the weights (normalisation stats from the dataset), and
-lerobot.utils.control_utils.predict_action, which also manages ACT's action-chunk queue.
+Same steps as LeRobot 0.4.2's lerobot.utils.control_utils.predict_action (used by lerobot-record):
+ACTPolicy.from_pretrained, the pre/post-processors saved next to the weights (normalisation stats from
+the dataset), and policy.select_action, which manages ACT's action-chunk queue. predict_action itself
+was removed in later LeRobot releases, so the steps are spelled out here; this works with LeRobot
+0.4.2 (sim eval) and 0.6.x (the real-robot machine).
 """
 
 from pathlib import Path
@@ -49,16 +51,10 @@ class LocalACTPolicy:
     def __call__(self, observation: dict[str, np.ndarray], task: str, robot_type: str) -> np.ndarray:
         """observation: 'observation.state' (D,) float32 in LeRobot units and
         'observation.images.<cam>' (H, W, 3) uint8. Returns the next action, shape (A,)."""
-        from lerobot.utils.control_utils import predict_action
+        from lerobot.policies.utils import prepare_observation_for_inference
 
-        action = predict_action(
-            observation,
-            self.policy,
-            self.device,
-            self.preprocessor,
-            self.postprocessor,
-            use_amp=False,
-            task=task,
-            robot_type=robot_type,
-        )
-        return action.reshape(-1).cpu().numpy()
+        with torch.inference_mode():
+            batch = prepare_observation_for_inference(dict(observation), self.device, task, robot_type)
+            batch = self.preprocessor(batch)
+            action = self.postprocessor(self.policy.select_action(batch))
+        return action.reshape(-1).float().cpu().numpy()

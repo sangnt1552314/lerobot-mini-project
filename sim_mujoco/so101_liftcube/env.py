@@ -19,6 +19,8 @@ from .config import JOINTS, LiftCubeConfig
 
 SIM_MUJOCO_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_MJCF = SIM_MUJOCO_DIR / "third_party" / "mujoco_menagerie" / "robotstudio_so101" / "so101.xml"
+ASSETS_DIR = SIM_MUJOCO_DIR / "assets"
+_MENAGERIE_YELLOW = np.array([1.0, 0.82, 0.12])
 
 
 def look_at_quat(pos, lookat) -> np.ndarray:
@@ -57,6 +59,13 @@ class LiftCubeEnv:
         self.front_cam = self.model.camera("front").id
         self.front_pos0 = self.model.cam_pos[self.front_cam].copy()
         self.front_quat0 = self.model.cam_quat[self.front_cam].copy()
+        self.wrist_cam = self.model.camera("wrist_cam").id
+        self._fovy0 = self.model.cam_fovy.copy()
+        tint_names = ["table_mat", *self._painted] + (["floor_mat"] if self.cfg.appearance.floor_texture else [])
+        self._tint0 = {self.model.material(n).id: self.model.mat_rgba[self.model.material(n).id].copy() for n in tint_names}
+        self._light_diffuse0 = self.model.light_diffuse.copy()
+        self._light_dir0 = self.model.light_dir.copy()
+        self._headlight0 = (self.model.vis.headlight.ambient.copy(), self.model.vis.headlight.diffuse.copy())
         self.renderer = mujoco.Renderer(self.model, height=self.cfg.height, width=self.cfg.width) if render else None
         self.rng = np.random.default_rng()
         self.steps = 0
@@ -69,22 +78,45 @@ class LiftCubeEnv:
         spec.option.timestep = 1.0 / (c.fps * c.substeps)
         spec.visual.global_.offwidth = max(c.width, 640)
         spec.visual.global_.offheight = max(c.height, 480)
-        spec.visual.headlight.ambient = [0.35, 0.35, 0.35]
+        amb = c.appearance.headlight_ambient if c.appearance.headlight_ambient is not None else 0.35
+        spec.visual.headlight.ambient = [amb, amb, amb]
         spec.visual.headlight.diffuse = [0.5, 0.5, 0.5]
 
-        tex = spec.add_texture(name="table_tex", type=mujoco.mjtTexture.mjTEXTURE_2D,
-                               builtin=mujoco.mjtBuiltin.mjBUILTIN_CHECKER, width=512, height=512,
-                               rgb1=[0.62, 0.55, 0.47], rgb2=[0.56, 0.49, 0.41])
-        mat = spec.add_material(name="table_mat", texrepeat=[8, 8], texuniform=True, reflectance=0.0)
+        ap = c.appearance
+        self._painted = []
+        if ap.robot_rgba is not None:
+            for m in spec.materials:
+                if np.allclose(np.asarray(m.rgba[:3]), _MENAGERIE_YELLOW, atol=0.02):
+                    m.rgba = list(ap.robot_rgba)
+                    self._painted.append(m.name)
+
+        if ap.table_texture:
+            tex = spec.add_texture(name="table_tex", type=mujoco.mjtTexture.mjTEXTURE_2D,
+                                   file=str(ASSETS_DIR / ap.table_texture))
+        else:
+            tex = spec.add_texture(name="table_tex", type=mujoco.mjtTexture.mjTEXTURE_2D,
+                                   builtin=mujoco.mjtBuiltin.mjBUILTIN_CHECKER, width=512, height=512,
+                                   rgb1=[0.62, 0.55, 0.47], rgb2=[0.56, 0.49, 0.41])
+        mat = spec.add_material(name="table_mat", texrepeat=list(ap.texture_repeat), texuniform=True, reflectance=0.0)
         mat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = tex.name
+        if ap.floor_texture:
+            ftex = spec.add_texture(name="floor_tex", type=mujoco.mjtTexture.mjTEXTURE_2D,
+                                    file=str(ASSETS_DIR / ap.floor_texture))
+            fmat = spec.add_material(name="floor_mat", texrepeat=[2, 2], texuniform=True, reflectance=0.0)
+            fmat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = ftex.name
         spec.add_texture(name="sky", type=mujoco.mjtTexture.mjTEXTURE_SKYBOX,
                          builtin=mujoco.mjtBuiltin.mjBUILTIN_GRADIENT, width=256, height=1536,
                          rgb1=[0.75, 0.78, 0.82], rgb2=[0.35, 0.38, 0.42])
 
         wb = spec.worldbody
-        wb.add_geom(name="table", type=mujoco.mjtGeom.mjGEOM_PLANE, size=[1.0, 1.0, 0.05], material="table_mat")
+        wb.add_geom(name="table", type=mujoco.mjtGeom.mjGEOM_PLANE, pos=[*ap.table_center, 0.0],
+                    size=[*ap.table_half, 0.05], material="table_mat")
+        if ap.floor_texture:  # visual only, a little below the table; the cube rests on the table plane
+            wb.add_geom(name="floor", type=mujoco.mjtGeom.mjGEOM_PLANE, pos=[0.0, 0.0, -0.03], size=[2.0, 2.0, 0.05],
+                        material="floor_mat", contype=0, conaffinity=0)
+        key = c.appearance.key_light_diffuse if c.appearance.key_light_diffuse is not None else 0.6
         wb.add_light(name="key", pos=[0.4, -0.4, 1.2], dir=[-0.3, 0.3, -1.0], type=mujoco.mjtLightType.mjLIGHT_DIRECTIONAL,
-                     diffuse=[0.6, 0.6, 0.6], castshadow=True)
+                     diffuse=[key, key, key], castshadow=True)
         wb.add_light(name="fill", pos=[-0.3, 0.5, 1.0], dir=[0.3, -0.5, -1.0], type=mujoco.mjtLightType.mjLIGHT_DIRECTIONAL,
                      diffuse=[0.25, 0.25, 0.25], castshadow=False)
 
@@ -134,12 +166,34 @@ class LiftCubeEnv:
         qq = np.zeros(4)
         mujoco.mju_mulQuat(qq, self.front_quat0, dq)
         self.model.cam_quat[self.front_cam] = qq
+        self._randomize_appearance(r)
         mujoco.mj_forward(self.model, self.data)
         for _ in range(20):  # let the cube settle on the table
             mujoco.mj_step(self.model, self.data)
         self.steps = 0
         self._above = 0
         return self.observation()
+
+    def _randomize_appearance(self, r: np.random.Generator) -> None:
+        """Per-episode look randomization of the 'real' profile. Each draw happens only when its
+        setting is on, so the default profile keeps exactly its original random sequence."""
+        ap, m = self.cfg.appearance, self.model
+        if ap.tint_jitter:
+            for mid, rgba0 in self._tint0.items():
+                m.mat_rgba[mid, :3] = np.clip(rgba0[:3] * r.uniform(1 - ap.tint_jitter, 1 + ap.tint_jitter, 3), 0, 1)
+        if ap.light_jitter:
+            scale = r.uniform(1 - ap.light_jitter, 1 + ap.light_jitter, (m.nlight, 1))
+            m.light_diffuse[:] = np.clip(self._light_diffuse0 * scale, 0, 1)
+            k = r.uniform(1 - ap.light_jitter, 1 + ap.light_jitter)
+            m.vis.headlight.ambient[:] = np.clip(self._headlight0[0] * k, 0, 1)
+            m.vis.headlight.diffuse[:] = np.clip(self._headlight0[1] * k, 0, 1)
+        if ap.light_dir_jitter:
+            d = self._light_dir0 + r.uniform(-ap.light_dir_jitter, ap.light_dir_jitter, self._light_dir0.shape)
+            m.light_dir[:] = d / np.linalg.norm(d, axis=1, keepdims=True)
+        if ap.front_fovy_jitter_deg:
+            m.cam_fovy[self.front_cam] = self._fovy0[self.front_cam] + r.uniform(-ap.front_fovy_jitter_deg, ap.front_fovy_jitter_deg)
+        if ap.wrist_fovy_range:
+            m.cam_fovy[self.wrist_cam] = r.uniform(*ap.wrist_fovy_range)
 
     def step(self, action_units: np.ndarray) -> dict:
         q = np.clip(self.units_to_rad(action_units), self.ctrlrange[:, 0], self.ctrlrange[:, 1])
