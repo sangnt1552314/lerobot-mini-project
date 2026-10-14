@@ -68,8 +68,11 @@ class Appearance:
     headlight_ambient: float | None = None  # None = 0.35; higher = brighter, softer shadows
     key_light_diffuse: float | None = None  # None = 0.6
     key_light_dir: tuple[float, float, float] | None = None   # None = (-0.3, 0.3, -1.0); keep walls out of its path
-    # colour cast of each real camera, as RGB gains on the rendered image, e.g. {"front": (0.8, 1.0, 0.6)}
+    # colour of each real camera on the rendered image: saturation (1 = unchanged, >1 more saturated), then
+    # RGB gains (the colour cast), e.g. {"front": 1.7} and {"front": (0.8, 1.0, 0.6)}
     camera_gain: dict[str, tuple[float, float, float]] = field(default_factory=dict)
+    camera_saturation: dict[str, float] = field(default_factory=dict)
+    object_rgba: tuple[float, float, float, float] | None = None   # the object's colour under this setup's light
     # per-episode randomization (0 = off)
     tint_jitter: float = 0.0                 # +- multiplicative per RGB channel: table, floor, walls, robot
     light_jitter: float = 0.0                # +- fraction of light intensity
@@ -240,7 +243,52 @@ def _office(cfg: LiftCubeConfig) -> LiftCubeConfig:
     )
 
 
-SETUPS = {"default": lambda cfg: cfg, "real": _real, "office": _office}
+def _home(cfg: LiftCubeConfig) -> LiftCubeConfig:
+    """Home setup (2026-10-14): white robot near the back of a glossy reddish-brown wood table, front webcam in
+    front of it, left of centre, looking down at it. Front camera fitted to assets/home/photo_front*.png at two
+    poses with the joints read from the arm (folded rest + the start pose below); the wrist camera is a
+    wide-angle lens with barrel distortion the pinhole sim camera can't copy, so its fovy is randomized widely.
+    Same start pose and expert settings as "real" (the earlier, roughly fitted model of this home setup)."""
+    return replace(
+        cfg,
+        # the start pose of the home policies (arm frame deg [7.9, 6.5, 11.3, 87.7, 93.0], gripper 79)
+        home_qpos=(0.1381, 0.1135, 0.1979, 1.5305, 1.6226, 1.3421),
+        home_noise=0.08,
+        front=CameraConfig(pos=(0.370, 0.099, 0.486), lookat=(0.100, -0.021, -0.174), fovy_deg=42.3, roll_deg=9.0),
+        camera_jitter_pos=0.04,
+        camera_jitter_deg=4.0,
+        # around where the photos have it (x 0.16, y 0.03)
+        object_x=(0.15, 0.28),
+        object_y=(-0.10, 0.10),
+        gripper_closed=REAL_GRIPPER_FLOOR_RAD,
+        approach_clearance=0.06,
+        collision_aware_grasp=True,
+        appearance=Appearance(
+            robot_rgba=(0.93, 0.93, 0.91, 1.0),
+            table_texture="home/table.png",
+            floor_rgba=(0.85, 0.85, 0.85, 1.0),
+            floor_z=-0.45,
+            table_center=(0.4075, 0.085),        # x -0.085..0.90, y -0.45..0.62 (back edge 8.5 cm behind the base)
+            table_half=(0.4925, 0.535),
+            texture_repeat=(6.0, 6.0),
+            tint_jitter=0.10,
+            light_jitter=0.35,
+            light_dir_jitter=0.3,
+            front_fovy_jitter_deg=5.0,
+            wrist_fovy_range=(85.0, 115.0),       # wide-angle real lens: the cube's size fits ~115, the jaw's ~85
+            # measured on the start-pose photos: the front webcam is darker and much more saturated (the table
+            # turns red-orange, the robot stays grey), the wrist camera a little brighter and paler
+            camera_gain={"front": (0.62, 0.598, 0.665), "wrist": (1.101, 1.106, 1.112)},
+            camera_saturation={"front": 1.69, "wrist": 1.1},
+            object_rgba=(0.88, 0.30, 0.25, 1.0),  # the cube looks pinkish red under these lights
+            camera_gain_jitter=0.06,              # the saturated front colours make larger casts look wrong
+            headlight_ambient=0.55,
+            key_light_diffuse=0.35,
+        ),
+    )
+
+
+SETUPS = {"default": lambda cfg: cfg, "real": _real, "office": _office, "home": _home}
 PROFILES = tuple(SETUPS)                    # the scripts' --profile choices
 
 

@@ -5,8 +5,12 @@
     python run_act_policy.py                               # preview: robot + cameras, NEVER moves
     python run_act_policy.py --mode control                # home (arm, then wrist roll, then gripper), run ACT
     python run_act_policy.py --mode control --hold-wrist-roll   # never rotate the wrist (camera cable)
-    python run_act_policy.py --profile office --object cylinder --gripper-floor 8 \
-        --checkpoint ../outputs/act_office_cylinder/checkpoints/last/pretrained_model   # office arm
+    python run_act_policy.py --checkpoint ../outputs/act_office_cylinder --gripper-floor 8   # office arm
+
+--checkpoint takes a run dir (outputs/act_office_cylinder) or a pretrained_model dir. The sim profile and
+object it was trained on come from its dataset name (so101_<profile>_<object>, as pbs/mujoco_pipeline.pbs
+names them; the older so101_liftcube_mujoco[_real...] datasets are cube); --profile / --object override.
+Shortcuts for the two arms: local/run_home.sh and local/run_office.sh.
 
 Settings: --port / $FOLLOWER_PORT (default /dev/tty.usbmodem5C821064861) and --robot-id /
 $FOLLOWER_ID (default home_follower, the LeRobot calibration name). .env files are NOT read, so
@@ -29,6 +33,7 @@ calibration closes at ~0, and its cylinder policy closes to 8), joints move at m
 """
 
 import argparse
+import json
 import math
 import os
 import sys
@@ -85,7 +90,33 @@ def load_sim_config(profile: str, obj: str = "cube"):
     return SIM_CONFIG.make_config(profile, obj)
 
 
-# Start pose (rad) of the training episodes; set from --profile in main().
+def resolve_checkpoint(path) -> Path:
+    """A pretrained_model dir, or a run dir (outputs/act_x) / checkpoint step dir that contains one."""
+    p = Path(path).expanduser().resolve()
+    for cand in (p, p / "pretrained_model", p / "checkpoints" / "last" / "pretrained_model"):
+        if (cand / "config.json").is_file():
+            return cand
+    sys.exit(f"No checkpoint in {p} (expected config.json there or in checkpoints/last/pretrained_model)")
+
+
+def infer_sim_setup(checkpoint: Path):
+    """(profile, object) of the sim dataset a checkpoint was trained on, from the dataset name in its
+    train_config.json: so101_<profile>_<object>[_suffix], or the older so101_liftcube_mujoco[_real...] (cube).
+    None if the name says neither."""
+    try:
+        name = json.loads((checkpoint / "train_config.json").read_text())["dataset"]["repo_id"].split("/")[-1]
+    except (OSError, KeyError, ValueError):
+        return None
+    if name.startswith("so101_liftcube_mujoco"):
+        return ("real" if "_real" in name else "default"), "cube"
+    for profile in SIM_CONFIG.PROFILES:
+        for obj in SIM_CONFIG.OBJECTS:
+            if name == f"so101_{profile}_{obj}" or name.startswith(f"so101_{profile}_{obj}_"):
+                return profile, obj
+    return None
+
+
+# Start pose (rad) of the training episodes; set from the checkpoint's profile in main().
 SIM_HOME_RAD = load_sim_config("default").home_qpos
 
 
@@ -214,9 +245,10 @@ class Setpoint:
     position loop see the full error, so the arm moves at the requested speed instead of creeping.
     If a joint falls more than track_limit behind its command for 0.5 s (blocked, e.g. the wrist
     camera caught on something), the arm is told to stay where it is and Stuck is raised.
+    track_limit None = no check (preview: the arm is not moving, so it always "lags").
     """
 
-    def __init__(self, robot, track_limit: float):
+    def __init__(self, robot, track_limit: float | None):
         self.robot = robot
         self.track_limit = track_limit
         self.cmd = robot.state() if robot else None
@@ -231,7 +263,7 @@ class Setpoint:
             goal[i] = target[i]
         self.cmd = rate_limit(self.cmd, goal, speed * dt)
         lag = max(abs(c - m) for c, m in zip(self.cmd, measured))
-        if lag > self.track_limit:
+        if self.track_limit is not None and lag > self.track_limit:
             self.lag_since = self.lag_since or now
             if now - self.lag_since > 0.5:
                 if self.robot:
@@ -273,12 +305,14 @@ def go_home(robot, args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--mode", choices=["preview", "control"], default="preview")
-    parser.add_argument("--checkpoint", default=str(DEFAULT_CHECKPOINT))
-    parser.add_argument("--profile", choices=SIM_CONFIG.PROFILES, default="real",
+    parser.add_argument("--checkpoint", default=str(DEFAULT_CHECKPOINT),
+                        help="run dir (outputs/act_office_cube) or pretrained_model dir")
+    parser.add_argument("--profile", choices=SIM_CONFIG.PROFILES, default=None,
                         help="sim_mujoco profile the checkpoint was trained with (sets the start pose). "
-                             "outputs/act_mujoco was trained with 'default'.")
-    parser.add_argument("--object", choices=SIM_CONFIG.OBJECTS, default="cube",
-                        help="object the checkpoint was trained on (sets the task string)")
+                             "Default: from the checkpoint's dataset name")
+    parser.add_argument("--object", choices=SIM_CONFIG.OBJECTS, default=None,
+                        help="object the checkpoint was trained on (sets the task string). Default: from the "
+                             "checkpoint's dataset name")
     parser.add_argument("--gripper-floor", type=float, default=ARM_LIMITS.get("gripper", (0.0, 100.0))[0],
                         help="never command the gripper below this (default 15: the home arm stalls below it; "
                              "the office arm closes at ~0: use 8 with the office cylinder policy)")
@@ -286,7 +320,7 @@ def main():
     parser.add_argument("--robot-id", default=os.environ.get("FOLLOWER_ID", "home_follower"))
     parser.add_argument("--wrist-cam", type=int, default=0, help="OpenCV index (same default as client.py)")
     parser.add_argument("--front-cam", type=int, default=1, help="OpenCV index of the third-person camera")
-    parser.add_argument("--seconds", type=float, default=20.0, help="How long to run the policy")
+    parser.add_argument("--seconds", type=float, default=40.0, help="How long to run the policy (x --fps = steps)")
     parser.add_argument("--fps", type=float, default=30.0, help="Control rate; the policy was trained at 30")
     parser.add_argument("--max-speed", type=float, default=90.0, help="Max joint speed under the policy, deg/s")
     parser.add_argument("--sanity-pad-deg", type=float, default=15.0, help="Margin around training actions")
@@ -302,15 +336,21 @@ def main():
     parser.add_argument("--device", default="mps" if torch.backends.mps.is_available() else "cpu")
     args = parser.parse_args()
 
+    checkpoint = resolve_checkpoint(args.checkpoint)
+    inferred = infer_sim_setup(checkpoint)
+    if (args.profile is None or args.object is None) and inferred is None:
+        sys.exit(f"Can't tell the sim profile/object of {checkpoint} from its dataset name; pass --profile and --object")
+    profile = args.profile or inferred[0]
+    obj = args.object or inferred[1]
+
     global SIM_HOME_RAD
-    sim_cfg = load_sim_config(args.profile, args.object)
+    sim_cfg = load_sim_config(profile, obj)
     SIM_HOME_RAD = sim_cfg.home_qpos
     task = sim_cfg.obj.task
-    print(f"profile {args.profile}, object {args.object} ('{task}'): start pose (sim rad) {[round(v, 3) for v in SIM_HOME_RAD]}")
+    print(f"profile {profile}, object {obj} ('{task}'): start pose (sim rad) {[round(v, 3) for v in SIM_HOME_RAD]}")
 
     from leisaac_ext.act_policy import LocalACTPolicy
 
-    checkpoint = Path(args.checkpoint).expanduser().resolve()
     print(f"loading {checkpoint} on {args.device} ...")
     policy = LocalACTPolicy(checkpoint, device=args.device, n_action_steps=args.n_action_steps)
     (state_q01, state_q99), action_box = training_ranges(checkpoint, args.sanity_pad_deg)
@@ -348,12 +388,14 @@ def main():
             print(f"saved {debug}/act_front.png and act_wrist.png: check front/wrist are not swapped")
 
         policy.reset()
-        sp = Setpoint(robot, args.track_limit)
-        if not robot:
+        moving = args.mode == "control" and robot is not None
+        # preview: no robot handle (never sends) and no lag check (the arm stays where it is)
+        sp = Setpoint(robot if moving else None, args.track_limit if moving else None)
+        if not moving:
             sp.cmd = list(current)
         hold_roll = current[4]
         n_steps = int(args.seconds * args.fps)
-        print(f"{'CONTROL' if args.mode == 'control' and robot else 'PREVIEW (no motion)'}: {n_steps} steps, Ctrl+C to stop")
+        print(f"{'CONTROL' if moving else 'PREVIEW (no motion)'}: {n_steps} steps, Ctrl+C to stop")
         for step in range(n_steps):
             t0 = time.time()
             if robot:
@@ -368,7 +410,7 @@ def main():
             # wrist_roll is overridden below under --hold-wrist-roll, so its target doesn't matter
             bad = [f"{n}={v:.1f} not in {lo:.0f}..{hi:.0f}" for n, v, (lo, hi) in zip(JOINT_ORDER, target, action_box.values())
                    if not lo <= v <= hi and not (args.hold_wrist_roll and n == "wrist_roll")]
-            if bad and args.mode == "control" and robot:
+            if bad and moving:
                 print(f"step {step}: STOP, target outside training range: " + "; ".join(bad))
                 break
             if bad:  # preview never moves the arm: report and keep going to show the whole trajectory
@@ -380,7 +422,7 @@ def main():
 
             if step % 15 == 0:
                 print(f"step {step:4d} state {fmt(current)}  target {fmt(target)}  send {fmt(command)}")
-            if args.mode == "control" and robot:
+            if moving:
                 robot.send(command)
             elif not robot:
                 current = command  # simulate perfect tracking for --no-robot

@@ -19,6 +19,9 @@
 #   for p in office:cylinder office:cube; do qsub -v PROFILE=${p%%:*},OBJECT=${p##*:},STEPS=60000 pbs/mujoco_pipeline.pbs; done
 #   qsub -v TRAIN_EXTRA_ARGS=--dataset.image_transforms.enable=true pbs/mujoco_pipeline.pbs   # extra lerobot-train flags
 #     (space-separated if several; no commas, qsub -v splits on them)
+# Eval (EPISODES, default 50) saves EVAL_VIDEOS [5] front|wrist videos next to the checkpoint and logs them with the
+# success rate to the training run on W&B (WANDB_ENABLE=false skips that).
+# One checkpoint only: SAVE_FREQ=<STEPS>,KEEP_CHECKPOINTS=1 (saved once at the end; nothing to resume if the job dies).
 # Re-submitting is safe: an existing dataset is reused, an existing OUTPUT_DIR is resumed up to STEPS.
 # Only the newest 2 checkpoints are kept (KEEP_CHECKPOINTS=2, set in sim/train_act_hpc.sh);
 # qsub -v KEEP_CHECKPOINTS=0 keeps all of them.
@@ -41,6 +44,8 @@ else
 fi
 STEPS="${STEPS:-20000}"
 EPISODES="${EPISODES:-50}"
+EVAL_VIDEOS="${EVAL_VIDEOS:-5}"
+WANDB_ENABLE="${WANDB_ENABLE:-true}"
 TRAIN_EXTRA_ARGS="${TRAIN_EXTRA_ARGS:-}"
 export DATASET_REPO_ID="local/$DATASET_NAME"
 export DATASET_ROOT="/scratch/e1583535/datasets/lerobot/$DATASET_REPO_ID"
@@ -73,8 +78,10 @@ echo "==== 2/3 train ACT for $STEPS steps -> $OUTPUT_DIR  ($(date)) extra args: 
 USAGE_CSV="$PWD/$LOG_DIR/$PBS_JOBID.usage.csv" bash sim/train_act_hpc.sh "$STEPS" $TRAIN_EXTRA_ARGS
 
 echo "==== 3/3 evaluate $EPISODES episodes  ($(date))"
-bash sim/hpc_env.sh python sim_mujoco/scripts/eval_act.py \
-    --checkpoint "$OUTPUT_DIR/checkpoints/last/pretrained_model" --episodes "$EPISODES" --profile "$PROFILE" --object "$OBJECT"
+EVAL_WANDB=()
+[ "$WANDB_ENABLE" = "true" ] && EVAL_WANDB=(--wandb)
+bash sim/hpc_env.sh python sim_mujoco/scripts/eval_act.py --checkpoint "$OUTPUT_DIR/checkpoints/last/pretrained_model" \
+    --episodes "$EPISODES" --profile "$PROFILE" --object "$OBJECT" --save_videos "$EVAL_VIDEOS" "${EVAL_WANDB[@]}"
 
 echo "==== PIPELINE DONE ($(date))"
 } > $LOG_DIR/$PBS_JOBID.log 2>&1

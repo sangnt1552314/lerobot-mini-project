@@ -16,7 +16,8 @@ A sim config is a physical **setup** (`--profile`: start pose, cameras, table, l
 | `--profile` | setup |
 |---|---|
 | `default` | the original sim (yellow robot, checker table) |
-| `real` | home setup: white robot, wood table, curtain (fitted 2026-10-12) |
+| `real` | home setup, first rough model: white robot, wood table, curtain (fitted 2026-10-12) |
+| `home` | home setup, refitted 2026-10-14 to [`assets/home/photo_front.png`](assets/home/photo_front.png) at the start pose (+ the folded pose) with the joints read from the arm: glossy reddish-brown table, front webcam in front, left of centre; per-camera colour (the front webcam is darker and more saturated); same start pose and expert as `real` |
 | `office` | office setup: black robot, light wood desk, wall on its right, front webcam on the front-left (fitted 2026-10-14 to [`assets/office/photo_front.png`](assets/office/photo_front.png) + [`photo_wrist.png`](assets/office/photo_wrist.png)) |
 
 | `--object` | object |

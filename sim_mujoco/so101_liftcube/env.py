@@ -135,6 +135,7 @@ class LiftCubeEnv:
                      diffuse=[0.25, 0.25, 0.25], castshadow=False)
 
         o = c.obj
+        rgba = list(ap.object_rgba or o.rgba)
         if o.shape == "box":
             gtype, size = mujoco.mjtGeom.mjGEOM_BOX, [o.half_width, o.half_width, o.half_height]
         elif o.shape == "cylinder":
@@ -144,12 +145,12 @@ class LiftCubeEnv:
         body = wb.add_body(name="object", pos=[0.2, 0.0, o.half_height])
         body.add_freejoint(name="object_joint")
         # contact settings as in Menagerie's scene_box.xml for this robot
-        body.add_geom(name="object", type=gtype, size=size, mass=o.mass, rgba=list(o.rgba),
+        body.add_geom(name="object", type=gtype, size=size, mass=o.mass, rgba=rgba,
                       friction=[o.friction, 0.03, 0.003], condim=3, contype=2, conaffinity=1, solref=[0.01, 1.0])
         if o.base_half_width > 0:  # flange at the foot of a cylinder
             body.add_geom(name="object_base", type=mujoco.mjtGeom.mjGEOM_CYLINDER,
                           pos=[0.0, 0.0, o.base_half_height - o.half_height], size=[o.base_half_width, o.base_half_height, 0.0],
-                          mass=0.0, rgba=list(o.rgba), friction=[o.friction, 0.03, 0.003], condim=3, contype=2,
+                          mass=0.0, rgba=rgba, friction=[o.friction, 0.03, 0.003], condim=3, contype=2,
                           conaffinity=1, solref=[0.01, 1.0])
 
         quat = look_at_quat(c.front.pos, c.front.lookat)
@@ -253,12 +254,20 @@ class LiftCubeEnv:
         return float(np.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)))
 
     def render(self, camera: str) -> np.ndarray:
-        """RGB image of a camera, with that camera's colour cast (Appearance.camera_gain) applied."""
+        """RGB image of a camera, with that camera's colour (Appearance.camera_saturation, then camera_gain; the
+        per-episode gain jitter comes after the saturation, so it is not amplified by it)."""
         self.renderer.update_scene(self.data, camera=camera)
         img = self.renderer.render().copy()
         gain = self._gain.get(camera)
-        if gain is not None:
-            img = np.clip(img * gain, 0, 255).astype(np.uint8)
+        sat = self.cfg.appearance.camera_saturation.get(camera.removesuffix("_cam"))
+        if gain is not None or sat is not None:
+            out = img.astype(np.float32)
+            if sat is not None:
+                luma = out @ np.array([0.299, 0.587, 0.114], np.float32)
+                out = luma[..., None] + sat * (out - luma[..., None])
+            if gain is not None:
+                out = out * gain
+            img = np.clip(out, 0, 255).astype(np.uint8)
         return img
 
     def observation(self) -> dict:
