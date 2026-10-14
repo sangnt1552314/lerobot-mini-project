@@ -1,12 +1,13 @@
-"""Scripted LiftCube expert for the MuJoCo SO-101: approach -> descend -> close -> lift -> hold.
+"""Scripted Lift expert for the MuJoCo SO-101: approach -> descend -> close -> lift -> hold.
 
-Plans the whole episode at reset from the cube pose, then replays it as 6-D absolute joint targets
+Plans the whole episode at reset from the object pose, then replays it as 6-D absolute joint targets
 (LeRobot units) at 30 Hz. Inverse kinematics is damped least squares on the Menagerie model's
 `gripperframe` site (at the fingertips; its x-axis points along the fingers and the jaws close along
-its z-axis): fingers pointing straight down, jaw axis aligned with a face of the cube. The descent and
-lift follow straight vertical lines (IK per frame); the approach interpolates in joint space. Near the
+its z-axis): fingers pointing straight down, jaw axis aligned with a face of a box, or, for a cylinder
+(any direction grips it), the direction that needs the least wrist roll from the start pose. The descent
+and lift follow straight vertical lines (IK per frame); the approach interpolates in joint space. Near the
 base the wrist_flex limit makes "straight down" unreachable above ~9 cm, so the lift solves for position
-only and lets the held cube tilt (up to ~30 deg).
+only and lets the held object tilt (up to ~30 deg).
 """
 
 import mujoco
@@ -65,36 +66,38 @@ class ScriptedLiftExpert:
         self.plan_q: np.ndarray | None = None
         self.ik_error = (0.0, 0.0)
 
-    def grasp_rotations(self, cube_xy: np.ndarray, cube_yaw: float) -> list[np.ndarray]:
-        """Fingers down (site x = -world z); jaw axis (site z) along one of the 4 cube face directions,
-        ordered by closeness to the arm's natural wrist roll (jaw axis ~ perpendicular to the reach)."""
-        natural = np.arctan2(cube_xy[1], cube_xy[0]) + np.pi / 2
-        cands = cube_yaw + np.arange(4) * np.pi / 2
-        order = np.argsort(np.abs(np.angle(np.exp(1j * (cands - natural)))), kind="stable")
+    @staticmethod
+    def down_rotation(theta: float) -> np.ndarray:
+        """Fingers down (site x = -world z), jaw axis (site z) at world yaw theta."""
         x = np.array([0.0, 0.0, -1.0])
-        rots = []
-        for theta in cands[order]:
-            z = np.array([np.cos(theta), np.sin(theta), 0.0])
-            rots.append(np.stack([x, np.cross(z, x), z], axis=1))
-        return rots
+        z = np.array([np.cos(theta), np.sin(theta), 0.0])
+        return np.stack([x, np.cross(z, x), z], axis=1)
 
-    def grasp_rotation(self, cube_xy: np.ndarray, cube_yaw: float) -> np.ndarray:
-        return self.grasp_rotations(cube_xy, cube_yaw)[0]
+    def grasp_rotations(self, obj_xy: np.ndarray, obj_yaw: float) -> list[np.ndarray]:
+        """Box: jaw axis along one of the 4 face directions, ordered by closeness to the arm's natural
+        wrist roll (jaw axis ~ perpendicular to the reach)."""
+        natural = np.arctan2(obj_xy[1], obj_xy[0]) + np.pi / 2
+        cands = obj_yaw + np.arange(4) * np.pi / 2
+        order = np.argsort(np.abs(np.angle(np.exp(1j * (cands - natural)))), kind="stable")
+        return [self.down_rotation(theta) for theta in cands[order]]
+
+    def grasp_rotation(self, obj_xy: np.ndarray, obj_yaw: float) -> np.ndarray:
+        return self.grasp_rotations(obj_xy, obj_yaw)[0]
 
     def self_collides(self, q: np.ndarray) -> bool:
-        """True if the robot touches itself at joint config q (contacts with the table/cube ignored)."""
+        """True if the robot touches itself at joint config q (contacts with the table/object ignored)."""
         m, d = self.ik.m, self.ik.d
         d.qpos[self.ik.qadr] = q
         mujoco.mj_fwdPosition(m, d)
-        skip = {0, self.env.cube_body}
+        skip = {0, self.env.object_body}
         return any(m.geom_bodyid[d.contact[i].geom1] not in skip and m.geom_bodyid[d.contact[i].geom2] not in skip
                    for i in range(d.ncon))
 
     def plan(self) -> None:
         c, env, r = self.cfg, self.env, self.env.rng
-        cube, yaw = env.cube_pos, env.cube_yaw
-        grasp_z = cube[2] - c.grasp_depth
-        hover_z = cube[2] + c.hover_height
+        obj, yaw = env.object_pos, env.object_yaw
+        grasp_z = obj[2] - c.obj.grasp_depth
+        hover_z = obj[2] + c.hover_height
         high_z = hover_z + c.approach_clearance
 
         def dur(t):
@@ -115,18 +118,26 @@ class ScriptedLiftExpert:
             return q, out
 
         def grasp_path(rot):
-            # the cube centre sits on the jaw axis between the jaws: shift the fingertips along it
-            tip_xy = cube[:2] - c.cube_in_site_z * rot[:2, 2]
+            # the object centre sits on the jaw axis between the jaws: shift the fingertips along it
+            tip_xy = obj[:2] - c.obj.in_site_z * rot[:2, 2]
             # good IK seed: the model's own top-down pickup pose
             seed = np.array([np.arctan2(tip_xy[1], tip_xy[0]), 0.0, 0.47, 1.18, 1.58, c.gripper_open])
             q_high, e_high = self.ik.solve(seed, np.array([*tip_xy, high_z]), rot, iters=500)
             return tip_xy, q_high, e_high
 
-        rots = self.grasp_rotations(cube[:2], yaw)
-        rot = rots[0]
-        tip_xy, q_high, e_high = grasp_path(rot)
+        if c.obj.shape == "cylinder":
+            # jaw yaws every 10 deg over a full turn; reachable ones (fingertips within 5 mm, fingers
+            # down), least wrist roll change from the start first
+            natural = np.arctan2(obj[1], obj[0]) + np.pi / 2
+            paths = [(rot, *grasp_path(rot)) for rot in map(self.down_rotation, natural + np.deg2rad(np.arange(-180, 180, 10)))]
+            paths = [p for p in paths if p[3][0] < 0.005 and p[3][1] < 0.05] or paths
+            paths.sort(key=lambda p: abs(p[2][4] - q_start[4]))
+        else:
+            paths = [(rot, *grasp_path(rot)) for rot in self.grasp_rotations(obj[:2], yaw)[:1]]
+        rot, tip_xy, q_high, e_high = paths[0]
         if c.collision_aware_grasp:
-            for cand in rots:
+            cands = [p[0] for p in paths] if c.obj.shape == "cylinder" else self.grasp_rotations(obj[:2], yaw)
+            for cand in cands:
                 txy, qh, eh = grasp_path(cand)
                 _, low = ik_line(qh, txy, cand, high_z, grasp_z, 8, w_rot=0.3, log=False)
                 if not any(self.self_collides(q) for q in [qh, *low]):

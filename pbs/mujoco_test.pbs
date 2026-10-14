@@ -11,6 +11,8 @@
 # preview -> 5 demos -> inspect -> 60 ACT training steps -> eval 2 episodes with that checkpoint.
 # The tiny checkpoint is expected to FAIL the task; this only checks that every step runs.
 # Submit from the repository root:  qsub pbs/mujoco_test.pbs     Log: logs/mujoco_test/<jobid>.log
+# A setup/object pair before its full run:  qsub -v PROFILE=office,OBJECT=cylinder pbs/mujoco_test.pbs
+# (what the cameras see: sim_mujoco/debug/preview_<PROFILE>_<OBJECT>/)
 
 cd $PBS_O_WORKDIR
 set -o pipefail
@@ -21,14 +23,17 @@ W=/scratch/e1583535/tmp/mujoco_test_$PBS_JOBID
 LOG_DIR='./logs/mujoco_test'
 mkdir -p $LOG_DIR $W
 export NCPUS="${NCPUS:-12}"
+PROFILE="${PROFILE:-default}"
+OBJECT="${OBJECT:-cube}"
+SIM=(--profile "$PROFILE" --object "$OBJECT")
 
 {
 set -e
-echo "==== host $(hostname), $(nvidia-smi --query-gpu=name --format=csv,noheader)"
+echo "==== host $(hostname), $(nvidia-smi --query-gpu=name --format=csv,noheader), profile $PROFILE, object $OBJECT"
 echo "==== 1/5 preview"
-bash sim/hpc_env.sh python sim_mujoco/scripts/preview.py --episodes 10 --out sim_mujoco/debug/preview
+bash sim/hpc_env.sh python sim_mujoco/scripts/preview.py --episodes 10 "${SIM[@]}" --out "sim_mujoco/debug/preview_${PROFILE}_${OBJECT}"
 echo "==== 2/5 generate 5 demos"
-bash sim/hpc_env.sh python sim_mujoco/scripts/generate.py --num_demos 5 --repo_id local/mujoco_test \
+bash sim/hpc_env.sh python sim_mujoco/scripts/generate.py --num_demos 5 "${SIM[@]}" --repo_id local/mujoco_test \
     --root $W/data/local/mujoco_test 2>&1 | grep -v -e "^Svt" -e "Map:" -e "moov atom"
 echo "==== 3/5 inspect"
 bash sim/hpc_env.sh python sim/tools/inspect_dataset.py --repo-id local/mujoco_test --root $W/data/local/mujoco_test \
@@ -38,6 +43,6 @@ DATASET_REPO_ID=local/mujoco_test DATASET_ROOT=$W/data/local/mujoco_test OUTPUT_
     WANDB_ENABLE=false bash sim/train_act_hpc.sh 60
 echo "==== 5/5 eval 2 episodes"
 bash sim/hpc_env.sh python sim_mujoco/scripts/eval_act.py --checkpoint $W/act/checkpoints/last/pretrained_model \
-    --episodes 2 --save_videos 1 --results_file $W/eval.json
+    --episodes 2 "${SIM[@]}" --save_videos 1 --results_file $W/eval.json
 echo "==== MUJOCO TEST PASSED (work dir $W)"
 } > $LOG_DIR/$PBS_JOBID.log 2>&1

@@ -5,6 +5,8 @@
     python run_act_policy.py                               # preview: robot + cameras, NEVER moves
     python run_act_policy.py --mode control                # home (arm, then wrist roll, then gripper), run ACT
     python run_act_policy.py --mode control --hold-wrist-roll   # never rotate the wrist (camera cable)
+    python run_act_policy.py --profile office --object cylinder --gripper-floor 8 \
+        --checkpoint ../outputs/act_office_cylinder/checkpoints/last/pretrained_model   # office arm
 
 Settings: --port / $FOLLOWER_PORT (default /dev/tty.usbmodem5C821064861) and --robot-id /
 $FOLLOWER_ID (default home_follower, the LeRobot calibration name). .env files are NOT read, so
@@ -20,7 +22,8 @@ transfer well; this script is for trying it safely.
 
 Safety: preview is the default and never sends commands. In control mode every target is checked
 against the checkpoint's own training range (stop if outside), the gripper is clipped by
-local/safety.ARM_LIMITS (this arm stalls below ~15), joints move at most --max-speed deg/s
+--gripper-floor (default local/safety.ARM_LIMITS: the home arm stalls below ~15; the office arm's
+calibration closes at ~0, and its cylinder policy closes to 8), joints move at most --max-speed deg/s
 (--home-speed while homing), and if a joint lags its command by more than --track-limit for 0.5 s
 (e.g. blocked) the arm is told to hold and the run stops. Ctrl+C stops. Keep a hand near the arm.
 """
@@ -45,8 +48,7 @@ sys.path.insert(0, str(REPO_ROOT / "sim"))
 from action_format import JOINT_ORDER  # noqa: E402
 from safety import ARM_LIMITS  # noqa: E402
 
-DEFAULT_CHECKPOINT = REPO_ROOT / "outputs/act_mujoco_real/checkpoints/last/pretrained_model"
-TASK = "Lift the red cube."
+DEFAULT_CHECKPOINT = REPO_ROOT / "outputs/act_mujoco_real_v2/checkpoints/last/pretrained_model"
 
 # --- sim <-> real joint mapping (edit after checking directions) --------------------------------
 # MJCF joint ranges (rad) of MuJoCo Menagerie robotstudio_so101 @ 0059d433 (sim_mujoco/setup_hpc.sh).
@@ -79,8 +81,8 @@ def _load_sim_config_module():
 SIM_CONFIG = _load_sim_config_module()
 
 
-def load_sim_config(profile: str):
-    return SIM_CONFIG.make_config(profile)
+def load_sim_config(profile: str, obj: str = "cube"):
+    return SIM_CONFIG.make_config(profile, obj)
 
 
 # Start pose (rad) of the training episodes; set from --profile in main().
@@ -145,9 +147,9 @@ def rate_limit(current, target, max_step):
     return [c + d * max_step / biggest for c, d in zip(current, deltas)]
 
 
-def clip_gripper(target):
+def clip_gripper(target, lo):
     out = list(target)
-    lo, hi = ARM_LIMITS.get("gripper", (0.0, 100.0))
+    hi = ARM_LIMITS.get("gripper", (0.0, 100.0))[1]
     out[5] = min(max(out[5], lo), hi)
     return out
 
@@ -244,7 +246,7 @@ class Setpoint:
 def go_home(robot, args):
     """Move to the sim start pose in stages so the wrist camera is never rotated while the arm is
     still folded: arm joints first, then wrist_roll (skipped with --hold-wrist-roll), gripper last."""
-    target = clip_gripper(sim_units_to_real(sim_rad_to_units(SIM_HOME_RAD)))
+    target = clip_gripper(sim_units_to_real(sim_rad_to_units(SIM_HOME_RAD)), args.gripper_floor)
     current = robot.state()
     if args.hold_wrist_roll:
         target[4] = current[4]
@@ -275,6 +277,11 @@ def main():
     parser.add_argument("--profile", choices=SIM_CONFIG.PROFILES, default="real",
                         help="sim_mujoco profile the checkpoint was trained with (sets the start pose). "
                              "outputs/act_mujoco was trained with 'default'.")
+    parser.add_argument("--object", choices=SIM_CONFIG.OBJECTS, default="cube",
+                        help="object the checkpoint was trained on (sets the task string)")
+    parser.add_argument("--gripper-floor", type=float, default=ARM_LIMITS.get("gripper", (0.0, 100.0))[0],
+                        help="never command the gripper below this (default 15: the home arm stalls below it; "
+                             "the office arm closes at ~0: use 8 with the office cylinder policy)")
     parser.add_argument("--port", default=os.environ.get("FOLLOWER_PORT", "/dev/tty.usbmodem5C821064861"))
     parser.add_argument("--robot-id", default=os.environ.get("FOLLOWER_ID", "home_follower"))
     parser.add_argument("--wrist-cam", type=int, default=0, help="OpenCV index (same default as client.py)")
@@ -296,8 +303,10 @@ def main():
     args = parser.parse_args()
 
     global SIM_HOME_RAD
-    SIM_HOME_RAD = load_sim_config(args.profile).home_qpos
-    print(f"profile {args.profile}: start pose (sim rad) {[round(v, 3) for v in SIM_HOME_RAD]}")
+    sim_cfg = load_sim_config(args.profile, args.object)
+    SIM_HOME_RAD = sim_cfg.home_qpos
+    task = sim_cfg.obj.task
+    print(f"profile {args.profile}, object {args.object} ('{task}'): start pose (sim rad) {[round(v, 3) for v in SIM_HOME_RAD]}")
 
     from leisaac_ext.act_policy import LocalACTPolicy
 
@@ -354,7 +363,7 @@ def main():
                 frames = {k: np.random.randint(0, 255, (480, 640, 3), np.uint8) for k in policy.camera_keys}
             obs = {"observation.state": real_to_sim_units(current)}
             obs.update({f"observation.images.{k}": frames[k] for k in policy.camera_keys})
-            target = sim_units_to_real(policy(obs, task=TASK, robot_type="so101_follower"))
+            target = sim_units_to_real(policy(obs, task=task, robot_type="so101_follower"))
 
             # wrist_roll is overridden below under --hold-wrist-roll, so its target doesn't matter
             bad = [f"{n}={v:.1f} not in {lo:.0f}..{hi:.0f}" for n, v, (lo, hi) in zip(JOINT_ORDER, target, action_box.values())
@@ -364,7 +373,7 @@ def main():
                 break
             if bad:  # preview never moves the arm: report and keep going to show the whole trajectory
                 print(f"step {step}: target outside training range (control mode would stop): " + "; ".join(bad))
-            goal = clip_gripper(target)
+            goal = clip_gripper(target, args.gripper_floor)
             if args.hold_wrist_roll:
                 goal[4] = hold_roll
             command = sp.step(goal, args.max_speed, current)

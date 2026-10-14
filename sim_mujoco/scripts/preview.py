@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from so101_liftcube import LiftCubeConfig, LiftCubeEnv, PROFILES, make_config, ScriptedLiftExpert  # noqa: E402
+from so101_liftcube import OBJECTS, LiftCubeConfig, LiftCubeEnv, PROFILES, make_config, ScriptedLiftExpert  # noqa: E402
 
 
 def main() -> None:
@@ -23,7 +23,8 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default=str(Path(__file__).resolve().parents[1] / "debug" / "preview"))
     ap.add_argument("--profile", choices=PROFILES, default="default",
-                    help="real = matched to the physical setup (start pose, camera, textures, randomization)")
+                    help="physical setup the sim is matched to (start pose, camera, textures, randomization)")
+    ap.add_argument("--object", choices=OBJECTS, default="cube", help="object to lift (so101_liftcube/config.py OBJECTS)")
     args = ap.parse_args()
 
     import imageio.v2 as imageio
@@ -31,7 +32,7 @@ def main() -> None:
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    cfg = make_config(args.profile)
+    cfg = make_config(args.profile, args.object)
     env = LiftCubeEnv(cfg, render=True)
     expert = ScriptedLiftExpert(env)
     ok, n_frames, t_render = 0, 0, 0.0
@@ -49,7 +50,7 @@ def main() -> None:
         t_render += time.perf_counter() - t0
         n_frames += len(expert)
         ok += env.is_success()
-        print(f"episode {ep}: {'SUCCESS' if env.is_success() else 'FAILED'} ({len(expert)} frames, cube z {env.cube_pos[2]:.3f})")
+        print(f"episode {ep}: {'SUCCESS' if env.is_success() else 'FAILED'} ({len(expert)} frames, object z {env.object_pos[2]:.3f})")
         if ep == 0:
             snaps["end"] = obs
             for name, o in snaps.items():
