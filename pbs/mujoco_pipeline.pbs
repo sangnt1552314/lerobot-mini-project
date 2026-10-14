@@ -5,7 +5,7 @@
 #PBS -N lerobot-mujoco-pipeline
 #PBS -q auto
 #PBS -l select=1:ngpus=1
-#PBS -l walltime=06:00:00
+#PBS -l walltime=03:00:00
 
 # Whole MuJoCo LiftCube pipeline in one job: generate demos -> train ACT -> evaluate.
 # Submit from the repository root:
