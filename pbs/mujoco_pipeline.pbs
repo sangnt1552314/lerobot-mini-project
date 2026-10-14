@@ -5,27 +5,30 @@
 #PBS -N lerobot-mujoco-pipeline
 #PBS -q auto
 #PBS -l select=1:ngpus=1
-#PBS -l walltime=03:00:00
+#PBS -l walltime=06:00:00
 
-# Whole MuJoCo LiftCube pipeline in one job: generate demos -> train ACT -> evaluate.
+# Whole MuJoCo LiftCube pipeline in one job: generate demos -> train ACT, evaluating every EVAL_FREQ steps.
 # Submit from the repository root:
 #   qsub pbs/mujoco_pipeline.pbs
+#   for p in home:cube office:cube office:cylinder; do qsub -v PROFILE=${p%%:*},OBJECT=${p##*:},STEPS=100000 pbs/mujoco_pipeline.pbs; done
 #   qsub -v NUM_DEMOS=200,STEPS=30000,OUTPUT_DIR=outputs/act_mujoco_try2 pbs/mujoco_pipeline.pbs
 #   qsub -v PROFILE=real,DATASET_NAME=so101_liftcube_mujoco_real,OUTPUT_DIR=outputs/act_mujoco_real pbs/mujoco_pipeline.pbs
 #   qsub -v PROFILE=office,OBJECT=cylinder,STEPS=60000 pbs/mujoco_pipeline.pbs
-# PROFILE (setup: default, real, office) x OBJECT (cube, cylinder): sim_mujoco/so101_liftcube/config.py. Every
+# PROFILE (setup: default, real, home, office) x OBJECT (cube, cylinder): sim_mujoco/so101_liftcube/config.py. Every
 # pair except default/cube gets its own dataset so101_<PROFILE>_<OBJECT> and OUTPUT_DIR outputs/act_<PROFILE>_<OBJECT>
 # (DATASET_NAME / OUTPUT_DIR override them), so one job per pair trains one policy per pair:
 #   for p in office:cylinder office:cube; do qsub -v PROFILE=${p%%:*},OBJECT=${p##*:},STEPS=60000 pbs/mujoco_pipeline.pbs; done
 #   qsub -v TRAIN_EXTRA_ARGS=--dataset.image_transforms.enable=true pbs/mujoco_pipeline.pbs   # extra lerobot-train flags
 #     (space-separated if several; no commas, qsub -v splits on them)
-# Eval (EPISODES, default 50) saves EVAL_VIDEOS [5] front|wrist videos next to the checkpoint and logs them with the
-# success rate to the training run on W&B (WANDB_ENABLE=false skips that).
-# One checkpoint only: SAVE_FREQ=<STEPS>,KEEP_CHECKPOINTS=1 (saved once at the end; nothing to resume if the job dies).
+# Eval: training stops every EVAL_FREQ [10000] steps (0 = only at the end) and runs EPISODES [50] episodes on that
+# checkpoint, then continues. Results: OUTPUT_DIR/eval/step_<step>.json + EVAL_VIDEOS [5] front|wrist videos in
+# OUTPUT_DIR/eval/step_<step>/; on W&B, in the training run: eval/success_rate vs eval/train_step and the
+# eval/videos media panel (WANDB_ENABLE=false skips W&B). A resumed job first evaluates the checkpoint it starts from
+# if that has no result yet. Each eval takes ~6 min.
 # Re-submitting is safe: an existing dataset is reused, an existing OUTPUT_DIR is resumed up to STEPS.
 # Only the newest 2 checkpoints are kept (KEEP_CHECKPOINTS=2, set in sim/train_act_hpc.sh);
 # qsub -v KEEP_CHECKPOINTS=0 keeps all of them.
-# Log: logs/mujoco_pipeline/<jobid>.log. Eval results + videos: next to the checkpoint.
+# Log: logs/mujoco_pipeline/<jobid>.log (ends with the success rate of every eval so far).
 
 cd $PBS_O_WORKDIR
 set -o pipefail
@@ -44,6 +47,7 @@ else
 fi
 STEPS="${STEPS:-20000}"
 EPISODES="${EPISODES:-50}"
+EVAL_FREQ="${EVAL_FREQ:-10000}"
 EVAL_VIDEOS="${EVAL_VIDEOS:-5}"
 WANDB_ENABLE="${WANDB_ENABLE:-true}"
 TRAIN_EXTRA_ARGS="${TRAIN_EXTRA_ARGS:-}"
@@ -72,16 +76,42 @@ fi
 bash sim/hpc_env.sh python sim/tools/inspect_dataset.py --repo-id "$DATASET_REPO_ID" --root "$DATASET_ROOT" \
     --video-backend pyav --out-dir "sim_mujoco/debug/dataset_$DATASET_NAME"
 
-echo "==== 2/3 train ACT for $STEPS steps -> $OUTPUT_DIR  ($(date)) extra args: ${TRAIN_EXTRA_ARGS:-none}"
-[ -e "$OUTPUT_DIR" ] && export RESUME=1
-# shellcheck disable=SC2086  # TRAIN_EXTRA_ARGS is a space-separated list of flags
-USAGE_CSV="$PWD/$LOG_DIR/$PBS_JOBID.usage.csv" bash sim/train_act_hpc.sh "$STEPS" $TRAIN_EXTRA_ARGS
-
-echo "==== 3/3 evaluate $EPISODES episodes  ($(date))"
 EVAL_WANDB=()
 [ "$WANDB_ENABLE" = "true" ] && EVAL_WANDB=(--wandb)
-bash sim/hpc_env.sh python sim_mujoco/scripts/eval_act.py --checkpoint "$OUTPUT_DIR/checkpoints/last/pretrained_model" \
-    --episodes "$EPISODES" --profile "$PROFILE" --object "$OBJECT" --save_videos "$EVAL_VIDEOS" "${EVAL_WANDB[@]}"
+last_step() {  # step of checkpoints/last, 0 before the first checkpoint
+    local f="$OUTPUT_DIR/checkpoints/last/training_state/training_step.json"
+    if [ -f "$f" ]; then tr -dc 0-9 < "$f"; else echo 0; fi
+}
+evaluate() {  # checkpoints/last, unless it already has a result; a failed eval does not stop training
+    local step; step=$(last_step)
+    local res; res="$OUTPUT_DIR/eval/step_$(printf %06d "$step").json"
+    [ "$step" -gt 0 ] && [ ! -f "$res" ] || return 0
+    echo "==== evaluate step $step: $EPISODES episodes  ($(date))"
+    mkdir -p "$OUTPUT_DIR/eval"
+    bash sim/hpc_env.sh python sim_mujoco/scripts/eval_act.py --checkpoint "$OUTPUT_DIR/checkpoints/last/pretrained_model" \
+        --episodes "$EPISODES" --profile "$PROFILE" --object "$OBJECT" --save_videos "$EVAL_VIDEOS" \
+        --results_file "$res" "${EVAL_WANDB[@]}" || echo "WARNING: eval at step $step failed"
+}
+
+echo "==== 2/3 train ACT up to $STEPS steps -> $OUTPUT_DIR, eval every ${EVAL_FREQ} steps  ($(date)) extra args: ${TRAIN_EXTRA_ARGS:-none}"
+evaluate   # a resumed run's starting checkpoint
+while [ "$(last_step)" -lt "$STEPS" ]; do
+    target=$STEPS
+    if [ "$EVAL_FREQ" -gt 0 ]; then
+        target=$(( ($(last_step) / EVAL_FREQ + 1) * EVAL_FREQ ))
+        [ "$target" -gt "$STEPS" ] && target=$STEPS
+    fi
+    echo "==== train $(last_step) -> $target  ($(date))"
+    [ -e "$OUTPUT_DIR" ] && export RESUME=1
+    # shellcheck disable=SC2086  # TRAIN_EXTRA_ARGS is a space-separated list of flags
+    USAGE_CSV="$PWD/$LOG_DIR/$PBS_JOBID.usage.csv" bash sim/train_act_hpc.sh "$target" $TRAIN_EXTRA_ARGS
+    [ "$(last_step)" -ge "$target" ] || { echo "training stopped at step $(last_step), expected $target"; exit 1; }
+    echo "==== 3/3 evaluate"
+    evaluate
+done
+
+echo "==== success rate per eval ($OUTPUT_DIR/eval)"
+grep -H '"success_rate"' "$OUTPUT_DIR"/eval/step_*.json || true
 
 echo "==== PIPELINE DONE ($(date))"
 } > $LOG_DIR/$PBS_JOBID.log 2>&1

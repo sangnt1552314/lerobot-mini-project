@@ -5,8 +5,10 @@
 
 Use the --profile / --object the checkpoint's dataset was generated with. --wandb logs the success rate and
 the saved videos to W&B, into the checkpoint's own training run (the run id in its train_config.json), so
-they sit next to the training curves; credentials as for training (WANDB_* in the environment or in the
-repo-root .env, or `wandb login`).
+they sit next to the training curves: eval/success_rate is plotted against eval/train_step (the checkpoint's
+training step) and eval/videos holds the videos of every evaluation (step slider in the media panel).
+Credentials as for training (WANDB_* in the environment or in the repo-root .env, or `wandb login`).
+Do not run it while lerobot-train is still writing to the same run (pbs/mujoco_pipeline.pbs alternates them).
 
 ACT runs in-process with the same LeRobot code that trained it (sim/leisaac_ext/act_policy.py ->
 LocalACTPolicy: pre/post-processors from the checkpoint, action-chunk queue via predict_action).
@@ -31,6 +33,14 @@ sys.path.insert(0, str(HERE.parents[2] / "sim"))              # sim/ -> leisaac_
 from so101_liftcube import OBJECTS, ROBOT_TYPE, LiftCubeConfig, LiftCubeEnv, PROFILES, make_config  # noqa: E402
 
 
+def train_step(ckpt: Path) -> int | None:
+    """Training step of a lerobot-train checkpoint (<run>/checkpoints/<step>/pretrained_model), else None."""
+    try:
+        return int(json.loads((ckpt.parent / "training_state" / "training_step.json").read_text())["step"])
+    except (OSError, ValueError, KeyError):
+        return None
+
+
 def log_to_wandb(ckpt: Path, summary: dict, video_dir: Path) -> None:
     """Success rate + eval videos to W&B, into the checkpoint's training run when train_config.json names one."""
     import wandb
@@ -51,16 +61,26 @@ def log_to_wandb(ckpt: Path, summary: dict, video_dir: Path) -> None:
         kwargs.update(id=wb["run_id"], resume="allow")
     else:
         kwargs.update(job_type="eval", name=f"eval_{ckpt.parents[2].name}")
+    if ckpt.parent.parent.name == "checkpoints":   # local files next to the training run's (offline runs too)
+        kwargs["dir"] = str(ckpt.parents[2])
     videos = sorted(video_dir.glob("*.mp4")) if video_dir.is_dir() else []
+    step = summary.get("train_step")
     try:
         run = wandb.init(**kwargs)
         metrics = {f"eval/{k}": summary[k] for k in ("success_rate", "successes", "episodes")}
-        run.log({**metrics, **{f"eval/video_{v.stem}": wandb.Video(str(v), format="mp4") for v in videos}})
+        if step is not None:
+            # lerobot-train already used W&B's own step up to this checkpoint, so eval gets its own x-axis
+            run.define_metric("eval/train_step")
+            run.define_metric("eval/*", step_metric="eval/train_step")
+            metrics["eval/train_step"] = step
+        media = {"eval/videos": [wandb.Video(str(v), caption=v.stem, format="mp4") for v in videos]} if videos else {}
+        run.log({**metrics, **media})
         run.summary.update(metrics)
-        print(f"[eval] logged success rate and {len(videos)} videos to W&B run {run.url or run.id}")
+        print(f"[eval] W&B: success rate {summary['success_rate']:.2f} at train step {step} and {len(videos)} videos "
+              f"-> run {run.url or f'{run.id} (offline, upload with: wandb sync <run dir>/wandb/offline-run-*)'}")
         run.finish()
     except Exception as e:  # the local results are already saved; W&B is a copy
-        print(f"[eval] W&B logging failed ({type(e).__name__}: {e}); results and videos are in {video_dir.parent}")
+        print(f"[eval] W&B logging FAILED ({type(e).__name__}: {e}); results and videos are in {video_dir.parent}")
 
 
 def save_video(frames: list[np.ndarray], path: Path, fps: int) -> None:
@@ -121,7 +141,7 @@ def main() -> None:
 
     n_ok = sum(e["success"] for e in episodes)
     summary = {
-        "checkpoint": str(ckpt), "env": "MuJoCo SO-101 Lift (sim_mujoco)", "profile": args.profile,
+        "checkpoint": str(ckpt), "train_step": train_step(ckpt), "env": "MuJoCo SO-101 Lift (sim_mujoco)", "profile": args.profile,
         "object": args.object, "episodes": len(episodes),
         "successes": n_ok, "failures": len(episodes) - n_ok, "success_rate": n_ok / max(len(episodes), 1),
         "success_height_m": cfg.success_height, "episode_length_s": cfg.episode_length_s,

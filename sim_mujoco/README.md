@@ -35,7 +35,7 @@ Changing a setup changes its data: use a new dataset name / output dir afterward
 
 ```bash
 bash sim_mujoco/setup_hpc.sh          # once (after qsub pbs/setup_act_env.pbs)
-qsub pbs/mujoco_pipeline.pbs          # generate 100 demos -> train ACT 20k steps -> evaluate 50 episodes
+qsub pbs/mujoco_pipeline.pbs          # generate 100 demos -> train ACT 20k steps, evaluating 50 episodes every 10k
 ```
 
 Options: `qsub -v NUM_DEMOS=200,STEPS=30000,OUTPUT_DIR=outputs/act_mujoco_try2 pbs/mujoco_pipeline.pbs`.
@@ -45,8 +45,11 @@ One policy per setup/object pair, one job each (every pair except `default`/`cub
 
 ```bash
 qsub -v PROFILE=office,OBJECT=cylinder pbs/mujoco_test.pbs     # optional 30-min check; images in sim_mujoco/debug/preview_office_cylinder/
-for p in office:cylinder office:cube; do qsub -v PROFILE=${p%%:*},OBJECT=${p##*:},STEPS=60000 pbs/mujoco_pipeline.pbs; done
+for p in home:cube office:cube office:cylinder; do qsub -v PROFILE=${p%%:*},OBJECT=${p##*:},STEPS=100000 pbs/mujoco_pipeline.pbs; done
 ```
+
+The second line continues `outputs/act_home_cube`, `act_office_cube` and `act_office_cylinder` to 100k steps
+(add `EVAL_FREQ=5000` to evaluate more often; each 50-episode eval takes ~6 min).
 
 On the robot laptop, copy `outputs/act_<profile>_<object>/checkpoints/last/pretrained_model` from the HPC and
 run `python local/run_act_policy.py --profile office --object cylinder --gripper-floor 8 --checkpoint ...`.
@@ -54,8 +57,10 @@ run `python local/run_act_policy.py --profile office --object cylinder --gripper
 Re-submitting is safe: an existing dataset is reused and an existing `OUTPUT_DIR` is resumed.
 `qsub pbs/mujoco_test.pbs` is a 30-minute plumbing test on throwaway data.
 
-Log: `logs/mujoco_pipeline/<jobid>.log`. Eval writes
-`eval_mujoco_<time>.json` and front|wrist videos of the first episodes next to the checkpoint.
+Log: `logs/mujoco_pipeline/<jobid>.log`. Training pauses every `EVAL_FREQ` (10000) steps for a 50-episode eval:
+`OUTPUT_DIR/eval/step_<step>.json` + front|wrist videos of the first 5 episodes in `OUTPUT_DIR/eval/step_<step>/`.
+On W&B they go into the training run: `eval/success_rate` against `eval/train_step`, and the `eval/videos` media
+panel (one entry per eval, step slider).
 `bash sim/hpc_env.sh python sim_mujoco/scripts/preview.py` (on a GPU node) saves what ACT sees to
 `sim_mujoco/debug/preview/`.
 

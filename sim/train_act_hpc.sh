@@ -25,7 +25,11 @@
 #   KEEP_CHECKPOINTS [2] keep only the newest N checkpoints/<step> dirs (0 = keep all). LeRobot has no
 #                    such option, so older ones are deleted while training runs and once at the end;
 #                    the one `last` points to is never deleted.
-# Extra arguments after STEPS go straight to lerobot-train. SIMULATION DATA ONLY.
+#   POLICY_PATH      if set, fine-tune that pretrained_model dir (--policy.path) instead of training
+#                    ACT from scratch (--policy.type=act). It must load with this LeRobot version:
+#                    scripts/prepare_act_checkpoint.py makes one (scripts/train_act.sh does all of this
+#                    for public / real-robot datasets).
+# Extra arguments after STEPS go straight to lerobot-train.
 
 set -euo pipefail
 
@@ -69,6 +73,7 @@ WANDB_ENABLE="${WANDB_ENABLE:-true}"
 WANDB_PROJECT="${WANDB_PROJECT:-cs6283}"
 WANDB_ENTITY="${WANDB_ENTITY:-}"
 RESUME="${RESUME:-0}"
+POLICY_PATH="${POLICY_PATH:-}"
 USAGE_CSV="${USAGE_CSV:-}"
 KEEP_CHECKPOINTS="${KEEP_CHECKPOINTS:-2}"
 [[ "$KEEP_CHECKPOINTS" =~ ^[0-9]+$ ]] || die "KEEP_CHECKPOINTS must be a non-negative integer"
@@ -81,7 +86,8 @@ if [ -z "${SINGULARITY_CONTAINER:-}${APPTAINER_CONTAINER:-}" ]; then
     FWD=()
     for v in SCRATCH_ROOT VENV FFMPEG_PREFIX DATASET_REPO_ID DATASET_ROOT OUTPUT_DIR JOB_NAME BATCH_SIZE \
              SAVE_FREQ LOG_FREQ NCPUS NUM_WORKERS VIDEO_BACKEND MIXED_PRECISION STAGE_DATASET STAGE_DIR \
-             WANDB_ENABLE WANDB_ENTITY WANDB_PROJECT WANDB_API_KEY RESUME USAGE_CSV KEEP_CHECKPOINTS PBS_JOBID; do
+             WANDB_ENABLE WANDB_ENTITY WANDB_PROJECT WANDB_API_KEY RESUME USAGE_CSV KEEP_CHECKPOINTS PBS_JOBID \
+             POLICY_PATH; do
         [ -n "${!v+x}" ] && FWD+=(--env "$v=${!v}")
     done
     FWD+=(--env "SCRATCH_ROOT=$SCRATCH" --env "NCPUS=$NCPUS" --env "NUM_WORKERS=$NUM_WORKERS")
@@ -157,10 +163,17 @@ if [ -e "$OUTPUT_DIR" ]; then
     CMD=(lerobot-train --config_path="$CONFIG" --resume=true "${RUNTIME_ARGS[@]}" "${WANDB_ARGS[@]}" "$@")
 else
     [ "$RESUME" = "1" ] && die "RESUME=1 but $OUTPUT_DIR does not exist."
-    info "Training ACT on $DATASET_REPO_ID for $STEPS steps -> $OUTPUT_DIR"
+    if [ -n "$POLICY_PATH" ]; then
+        [ -f "$POLICY_PATH/config.json" ] || die "POLICY_PATH=$POLICY_PATH has no config.json"
+        POLICY_ARGS=(--policy.path="$POLICY_PATH")
+        info "Fine-tuning $POLICY_PATH on $DATASET_REPO_ID for $STEPS steps -> $OUTPUT_DIR"
+    else
+        POLICY_ARGS=(--policy.type=act)
+        info "Training ACT from scratch on $DATASET_REPO_ID for $STEPS steps -> $OUTPUT_DIR"
+    fi
     CMD=(lerobot-train
         --dataset.repo_id="$DATASET_REPO_ID"
-        --policy.type=act
+        "${POLICY_ARGS[@]}"
         --policy.device=cuda
         --policy.push_to_hub=false
         --output_dir="$OUTPUT_DIR"

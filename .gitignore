@@ -227,3 +227,8 @@ debug_frames/
 # ACT training runs (sim/train_act_hpc.sh)
 /outputs/
 logs/
+
+# ACT: dataset reports (scripts/check_act_dataset.py) and per-arm calibration readings
+dataset_checks/
+local/act_calibration/
+local/fallback_calibration/

@@ -1,0 +1,30 @@
+#!/bin/bash
+#PBS -P CFP05-CF-002
+#PBS -j oe
+#PBS -k oed
+#PBS -N lerobot-train-act
+#PBS -q auto
+#PBS -l select=1:ngpus=1
+#PBS -l walltime=06:00:00
+
+# ACT for the real-robot cube pickup. All settings are scripts/train_act.sh environment variables (-v).
+# Submit from the repository root:
+#   qsub pbs/train_act.pbs                                                           # 1000-step smoke test
+#   qsub -v DATASET_REPO_ID=<hf_user>/so101_redcube_lift,STEPS=10000 pbs/train_act.pbs   # first experiment
+#   qsub -v DATASET_REPO_ID=<hf_user>/so101_redcube_lift,STEPS=30000 pbs/train_act.pbs   # main: continues the same OUTPUT_DIR
+#   qsub -v DATASET_REPO_ID=<hf_user>/so101_redcube_lift,PRETRAINED=none,STEPS=30000 pbs/train_act.pbs   # from scratch
+#   qsub -W depend=afterany:<jobid> -v <same -v as that job> pbs/train_act.pbs        # continue past the walltime
+# Defaults: fine-tune omiya239532/so101_act_cotrain, batch 8, lr 1e-5, checkpoint every 5000 steps.
+# Log: logs/train_act/<jobid>.log (GPU, versions, dataset report, loss every LOG_FREQ steps, final load test)
+# GPU/CPU usage: logs/train_act/<jobid>.usage.csv. No ngrok here.
+
+cd "$PBS_O_WORKDIR" || exit 1
+
+module load singularity
+
+LOG_DIR='./logs/train_act'
+mkdir -p $LOG_DIR
+export NCPUS="${NCPUS:-12}"
+export USAGE_CSV="${USAGE_CSV:-$PWD/$LOG_DIR/$PBS_JOBID.usage.csv}"
+
+bash scripts/train_act.sh > $LOG_DIR/$PBS_JOBID.log 2>&1
