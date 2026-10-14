@@ -13,6 +13,8 @@
 #   qsub -v NUM_DEMOS=200,STEPS=30000,OUTPUT_DIR=outputs/act_mujoco_try2 pbs/mujoco_pipeline.pbs
 #   qsub -v PROFILE=real,DATASET_NAME=so101_liftcube_mujoco_real,OUTPUT_DIR=outputs/act_mujoco_real pbs/mujoco_pipeline.pbs
 # PROFILE=real uses the sim matched to the physical setup (sim_mujoco/so101_liftcube/config.py).
+#   qsub -v TRAIN_EXTRA_ARGS=--dataset.image_transforms.enable=true pbs/mujoco_pipeline.pbs   # extra lerobot-train flags
+#     (space-separated if several; no commas, qsub -v splits on them)
 # Re-submitting is safe: an existing dataset is reused, an existing OUTPUT_DIR is resumed up to STEPS.
 # Only the newest 2 checkpoints are kept (KEEP_CHECKPOINTS=2, set in sim/train_act_hpc.sh);
 # qsub -v KEEP_CHECKPOINTS=0 keeps all of them.
@@ -28,6 +30,7 @@ PROFILE="${PROFILE:-default}"
 DATASET_NAME="${DATASET_NAME:-so101_liftcube_mujoco}"
 STEPS="${STEPS:-20000}"
 EPISODES="${EPISODES:-50}"
+TRAIN_EXTRA_ARGS="${TRAIN_EXTRA_ARGS:-}"
 export DATASET_REPO_ID="local/$DATASET_NAME"
 export DATASET_ROOT="/scratch/e1583535/datasets/lerobot/$DATASET_REPO_ID"
 export OUTPUT_DIR="${OUTPUT_DIR:-outputs/act_mujoco}"
@@ -50,9 +53,10 @@ fi
 bash sim/hpc_env.sh python sim/tools/inspect_dataset.py --repo-id "$DATASET_REPO_ID" --root "$DATASET_ROOT" \
     --video-backend pyav --out-dir "sim_mujoco/debug/dataset_$DATASET_NAME"
 
-echo "==== 2/3 train ACT for $STEPS steps -> $OUTPUT_DIR  ($(date))"
+echo "==== 2/3 train ACT for $STEPS steps -> $OUTPUT_DIR  ($(date)) extra args: ${TRAIN_EXTRA_ARGS:-none}"
 [ -e "$OUTPUT_DIR" ] && export RESUME=1
-USAGE_CSV="$PWD/$LOG_DIR/$PBS_JOBID.usage.csv" bash sim/train_act_hpc.sh "$STEPS"
+# shellcheck disable=SC2086  # TRAIN_EXTRA_ARGS is a space-separated list of flags
+USAGE_CSV="$PWD/$LOG_DIR/$PBS_JOBID.usage.csv" bash sim/train_act_hpc.sh "$STEPS" $TRAIN_EXTRA_ARGS
 
 echo "==== 3/3 evaluate $EPISODES episodes  ($(date))"
 bash sim/hpc_env.sh python sim_mujoco/scripts/eval_act.py \

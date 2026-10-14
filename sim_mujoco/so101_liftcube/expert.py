@@ -65,56 +65,89 @@ class ScriptedLiftExpert:
         self.plan_q: np.ndarray | None = None
         self.ik_error = (0.0, 0.0)
 
-    def grasp_rotation(self, cube_xy: np.ndarray, cube_yaw: float) -> np.ndarray:
-        """Fingers down (site x = -world z); jaw axis (site z) along a cube face, picking the face
-        direction closest to the arm's natural wrist roll (jaw axis ~ perpendicular to the reach)."""
+    def grasp_rotations(self, cube_xy: np.ndarray, cube_yaw: float) -> list[np.ndarray]:
+        """Fingers down (site x = -world z); jaw axis (site z) along one of the 4 cube face directions,
+        ordered by closeness to the arm's natural wrist roll (jaw axis ~ perpendicular to the reach)."""
         natural = np.arctan2(cube_xy[1], cube_xy[0]) + np.pi / 2
         cands = cube_yaw + np.arange(4) * np.pi / 2
-        theta = cands[np.argmin(np.abs(np.angle(np.exp(1j * (cands - natural)))))]
+        order = np.argsort(np.abs(np.angle(np.exp(1j * (cands - natural)))), kind="stable")
         x = np.array([0.0, 0.0, -1.0])
-        z = np.array([np.cos(theta), np.sin(theta), 0.0])
-        y = np.cross(z, x)
-        return np.stack([x, y, z], axis=1)
+        rots = []
+        for theta in cands[order]:
+            z = np.array([np.cos(theta), np.sin(theta), 0.0])
+            rots.append(np.stack([x, np.cross(z, x), z], axis=1))
+        return rots
+
+    def grasp_rotation(self, cube_xy: np.ndarray, cube_yaw: float) -> np.ndarray:
+        return self.grasp_rotations(cube_xy, cube_yaw)[0]
+
+    def self_collides(self, q: np.ndarray) -> bool:
+        """True if the robot touches itself at joint config q (contacts with the table/cube ignored)."""
+        m, d = self.ik.m, self.ik.d
+        d.qpos[self.ik.qadr] = q
+        mujoco.mj_fwdPosition(m, d)
+        skip = {0, self.env.cube_body}
+        return any(m.geom_bodyid[d.contact[i].geom1] not in skip and m.geom_bodyid[d.contact[i].geom2] not in skip
+                   for i in range(d.ncon))
 
     def plan(self) -> None:
         c, env, r = self.cfg, self.env, self.env.rng
         cube, yaw = env.cube_pos, env.cube_yaw
-        rot = self.grasp_rotation(cube[:2], yaw)
-        # the cube centre sits on the jaw axis between the jaws: shift the fingertips along it
-        tip_xy = cube[:2] - c.cube_in_site_z * rot[:2, 2]
         grasp_z = cube[2] - c.grasp_depth
         hover_z = cube[2] + c.hover_height
+        high_z = hover_z + c.approach_clearance
 
         def dur(t):
             return max(2, int(round(t * (1 + r.uniform(-c.timing_noise, c.timing_noise)) * c.fps)))
 
         n_app, n_desc, n_close, n_lift, n_hold = map(dur, (c.t_approach, c.t_descend, c.t_close, c.t_lift, c.t_hold))
+        n_lower = dur(c.t_lower) if c.approach_clearance > 0 else 0
         q_start = env.qpos
-        # good IK seed: the model's own top-down pickup pose
-        seed = np.array([np.arctan2(tip_xy[1], tip_xy[0]), 0.0, 0.47, 1.18, 1.58, c.gripper_open])
         errs = []
 
-        def ik_line(q, z0, z1, n, w_rot):
+        def ik_line(q, tip_xy, rot, z0, z1, n, w_rot, log=True):
             out = []
             for s in smoothstep(np.linspace(0, 1, n + 1)[1:]):
                 q, e = self.ik.solve(q, np.array([*tip_xy, z0 + (z1 - z0) * s]), rot, w_rot=w_rot)
-                errs.append(e)
+                if log:
+                    errs.append(e)
                 out.append(q.copy())
             return q, out
 
-        q_hover, e = self.ik.solve(seed, np.array([*tip_xy, hover_z]), rot, iters=500)
-        errs.append(e)
+        def grasp_path(rot):
+            # the cube centre sits on the jaw axis between the jaws: shift the fingertips along it
+            tip_xy = cube[:2] - c.cube_in_site_z * rot[:2, 2]
+            # good IK seed: the model's own top-down pickup pose
+            seed = np.array([np.arctan2(tip_xy[1], tip_xy[0]), 0.0, 0.47, 1.18, 1.58, c.gripper_open])
+            q_high, e_high = self.ik.solve(seed, np.array([*tip_xy, high_z]), rot, iters=500)
+            return tip_xy, q_high, e_high
+
+        rots = self.grasp_rotations(cube[:2], yaw)
+        rot = rots[0]
+        tip_xy, q_high, e_high = grasp_path(rot)
+        if c.collision_aware_grasp:
+            for cand in rots:
+                txy, qh, eh = grasp_path(cand)
+                _, low = ik_line(qh, txy, cand, high_z, grasp_z, 8, w_rot=0.3, log=False)
+                if not any(self.self_collides(q) for q in [qh, *low]):
+                    rot, tip_xy, q_high, e_high = cand, txy, qh, eh
+                    break
+        errs.append(e_high)
         traj = []
         for s in smoothstep(np.linspace(0, 1, n_app + 1)[1:]):  # approach in joint space, open gripper
-            q = q_start + (q_hover - q_start) * s
+            q = q_start + (q_high - q_start) * s
             q[5] = q_start[5] + (c.gripper_open - q_start[5]) * min(1.0, 2 * s)
             traj.append(q)
-        q, seg = ik_line(q_hover, hover_z, grasp_z, n_desc, w_rot=0.3)
+        q = q_high
+        if n_lower:
+            q, seg = ik_line(q, tip_xy, rot, high_z, hover_z, n_lower, w_rot=0.3)
+            traj += [np.r_[qq[ARM], c.gripper_open] for qq in seg]
+        q, seg = ik_line(q, tip_xy, rot, hover_z, grasp_z, n_desc, w_rot=0.3)
         traj += [np.r_[qq[ARM], c.gripper_open] for qq in seg]
         q_grasp = traj[-1].copy()
         for s in smoothstep(np.linspace(0, 1, n_close + 1)[1:]):
             traj.append(np.r_[q_grasp[ARM], c.gripper_open + (c.gripper_closed - c.gripper_open) * s])
-        q, seg = ik_line(q, grasp_z, c.lift_height, n_lift, w_rot=0.0)
+        q, seg = ik_line(q, tip_xy, rot, grasp_z, c.lift_height, n_lift, w_rot=0.0)
         traj += [np.r_[qq[ARM], c.gripper_closed] for qq in seg]
         traj += [traj[-1].copy() for _ in range(n_hold)]
         self.plan_q = np.array(traj)

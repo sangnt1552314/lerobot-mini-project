@@ -83,6 +83,10 @@ class LiftCubeConfig:
     t_lift: float = 1.4
     t_hold: float = 0.6
     timing_noise: float = 0.15              # +- fraction, per phase, per episode
+    # off in the default profile (keeps its trajectories identical); see make_config("real")
+    approach_clearance: float = 0.0         # approach to hover_height + this, then lower to hover (extra phase)
+    t_lower: float = 0.5                    # duration of that extra lowering phase
+    collision_aware_grasp: bool = False     # try the other cube faces if the descent self-collides
 
     appearance: Appearance = field(default_factory=Appearance)
 
@@ -119,6 +123,11 @@ def make_config(profile: str = "default") -> LiftCubeConfig:
         cube_x=(0.17, 0.30),
         cube_y=(-0.10, 0.10),
         gripper_closed=REAL_GRIPPER_FLOOR_RAD,
+        # the start pose is low and forward (fingertips ~3.5 cm above the table), so a direct joint-space
+        # approach can sweep the gripper into cubes at the far edge; approach from higher instead.
+        approach_clearance=0.06,
+        # near the base some wrist rolls put the wrist camera mount into the shoulder link
+        collision_aware_grasp=True,
         appearance=Appearance(
             robot_rgba=(0.93, 0.93, 0.91, 1.0),
             table_texture="real/table_wood.png",
