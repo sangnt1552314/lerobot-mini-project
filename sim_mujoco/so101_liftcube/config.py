@@ -10,6 +10,7 @@ from dataclasses import dataclass, field, replace
 JOINTS = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper")
 TASK = "Lift the red cube."
 ROBOT_TYPE = "so101_follower"
+PROFILES = ("default", "real")   # make_config() names; the scripts' --profile choices
 
 
 @dataclass
@@ -106,7 +107,7 @@ def make_config(profile: str = "default") -> LiftCubeConfig:
     if profile == "default":
         return cfg
     if profile != "real":
-        raise ValueError(f"unknown profile {profile!r}; use 'default' or 'real'")
+        raise ValueError(f"unknown profile {profile!r}; use one of {PROFILES}")
     return replace(
         cfg,
         # real arm, hand-placed start pose, read with local/run_act_policy.py's mapping:

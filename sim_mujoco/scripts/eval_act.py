@@ -22,7 +22,7 @@ import numpy as np
 HERE = Path(__file__).resolve()
 sys.path.insert(0, str(HERE.parents[1]))                      # sim_mujoco/
 sys.path.insert(0, str(HERE.parents[2] / "sim"))              # sim/ -> leisaac_ext (no Isaac imports)
-from so101_liftcube import ROBOT_TYPE, TASK, LiftCubeConfig, LiftCubeEnv, make_config  # noqa: E402
+from so101_liftcube import ROBOT_TYPE, TASK, LiftCubeConfig, LiftCubeEnv, PROFILES, make_config  # noqa: E402
 
 
 def save_video(frames: list[np.ndarray], path: Path, fps: int) -> None:
@@ -40,7 +40,7 @@ def main() -> None:
     ap.add_argument("--n_action_steps", type=int, default=None, help="override ACT n_action_steps (default: checkpoint)")
     ap.add_argument("--save_videos", type=int, default=3, help="save front|wrist videos of the first N episodes")
     ap.add_argument("--results_file", default=None)
-    ap.add_argument("--profile", choices=["default", "real"], default="default",
+    ap.add_argument("--profile", choices=PROFILES, default="default",
                     help="real = matched to the physical setup (start pose, camera, textures, randomization)")
     args = ap.parse_args()
 

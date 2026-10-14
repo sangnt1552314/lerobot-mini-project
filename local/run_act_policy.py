@@ -45,7 +45,7 @@ sys.path.insert(0, str(REPO_ROOT / "sim"))
 from action_format import JOINT_ORDER  # noqa: E402
 from safety import ARM_LIMITS  # noqa: E402
 
-DEFAULT_CHECKPOINT = REPO_ROOT / "outputs/act_mujoco/checkpoints/last/pretrained_model"
+DEFAULT_CHECKPOINT = REPO_ROOT / "outputs/act_mujoco_real/checkpoints/last/pretrained_model"
 TASK = "Lift the red cube."
 
 # --- sim <-> real joint mapping (edit after checking directions) --------------------------------
@@ -64,8 +64,8 @@ SIGN = {"shoulder_pan": 1, "shoulder_lift": 1, "elbow_flex": 1, "wrist_flex": 1,
 OFFSET_DEG = {"shoulder_pan": 0.0, "shoulder_lift": 0.0, "elbow_flex": 0.0, "wrist_flex": 0.0, "wrist_roll": 0.0}
 
 
-def load_sim_config(profile: str):
-    """sim_mujoco's make_config(profile), loaded from config.py alone so MuJoCo isn't needed here."""
+def _load_sim_config_module():
+    """sim_mujoco's config.py alone, so MuJoCo isn't needed here."""
     import importlib.util
 
     path = REPO_ROOT / "sim_mujoco" / "so101_liftcube" / "config.py"
@@ -73,7 +73,14 @@ def load_sim_config(profile: str):
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module  # dataclasses needs the module registered
     spec.loader.exec_module(module)
-    return module.make_config(profile)
+    return module
+
+
+SIM_CONFIG = _load_sim_config_module()
+
+
+def load_sim_config(profile: str):
+    return SIM_CONFIG.make_config(profile)
 
 
 # Start pose (rad) of the training episodes; set from --profile in main().
@@ -265,7 +272,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--mode", choices=["preview", "control"], default="preview")
     parser.add_argument("--checkpoint", default=str(DEFAULT_CHECKPOINT))
-    parser.add_argument("--profile", choices=["real", "default"], default="real",
+    parser.add_argument("--profile", choices=SIM_CONFIG.PROFILES, default="real",
                         help="sim_mujoco profile the checkpoint was trained with (sets the start pose). "
                              "outputs/act_mujoco was trained with 'default'.")
     parser.add_argument("--port", default=os.environ.get("FOLLOWER_PORT", "/dev/tty.usbmodem5C821064861"))
@@ -349,11 +356,14 @@ def main():
             obs.update({f"observation.images.{k}": frames[k] for k in policy.camera_keys})
             target = sim_units_to_real(policy(obs, task=TASK, robot_type="so101_follower"))
 
+            # wrist_roll is overridden below under --hold-wrist-roll, so its target doesn't matter
             bad = [f"{n}={v:.1f} not in {lo:.0f}..{hi:.0f}" for n, v, (lo, hi) in zip(JOINT_ORDER, target, action_box.values())
-                   if not lo <= v <= hi]
-            if bad:
+                   if not lo <= v <= hi and not (args.hold_wrist_roll and n == "wrist_roll")]
+            if bad and args.mode == "control" and robot:
                 print(f"step {step}: STOP, target outside training range: " + "; ".join(bad))
                 break
+            if bad:  # preview never moves the arm: report and keep going to show the whole trajectory
+                print(f"step {step}: target outside training range (control mode would stop): " + "; ".join(bad))
             goal = clip_gripper(target)
             if args.hold_wrist_roll:
                 goal[4] = hold_roll

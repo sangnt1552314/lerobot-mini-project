@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from so101_liftcube import LiftCubeConfig, LiftCubeEnv, make_config, ScriptedLiftExpert  # noqa: E402
+from so101_liftcube import LiftCubeConfig, LiftCubeEnv, PROFILES, make_config, ScriptedLiftExpert  # noqa: E402
 
 
 def main() -> None:
@@ -22,7 +22,7 @@ def main() -> None:
     ap.add_argument("--episodes", type=int, default=10)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default=str(Path(__file__).resolve().parents[1] / "debug" / "preview"))
-    ap.add_argument("--profile", choices=["default", "real"], default="default",
+    ap.add_argument("--profile", choices=PROFILES, default="default",
                     help="real = matched to the physical setup (start pose, camera, textures, randomization)")
     args = ap.parse_args()
 
