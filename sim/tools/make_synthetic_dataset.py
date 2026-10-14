@@ -2,7 +2,7 @@
 
     python sim/tools/make_synthetic_dataset.py --root /scratch/.../local/synthetic_liftcube_smoke
 
-The features match what LeIsaac's recorder writes for LeIsaac-SO101-LiftCube-DualCam-v0
+The features match what sim_mujoco/scripts/generate.py writes (originally LeIsaac-SO101-LiftCube-DualCam-v0)
 (observation.images.front / .wrist 480x640x3 AV1 video at 30 fps, observation.state (6,),
 action (6,), robot_type so101_follower, task "Lift the red cube."), and it is written with
 LeRobot's own LeRobotDataset.create / add_frame / save_episode / finalize, so video encoding

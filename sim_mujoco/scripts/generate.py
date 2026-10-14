@@ -3,7 +3,7 @@
     python sim_mujoco/scripts/generate.py --num_demos 100 [--profile office --object cylinder] \
         --repo_id local/so101_liftcube_mujoco --root /scratch/.../lerobot/local/so101_liftcube_mujoco
 
-Same features as the Isaac pipeline (sim/): observation.images.front / .wrist (480x640x3 video, 30 fps),
+Same features as the original Isaac pipeline: observation.images.front / .wrist (480x640x3 video, 30 fps),
 observation.state (6,), action (6,) with names shoulder_pan.pos..gripper.pos, robot_type so101_follower,
 task from the object ("Lift the red cube.", "Lift the red cylinder.", ...). Each frame stores the
 observation *before* the action, as lerobot-record does. Episode i uses seed --seed + attempt index, so a

@@ -224,6 +224,6 @@ __marimo__/
 
 debug_frames/
 
-# ACT training runs from sim/train_act.sh
+# ACT training runs (sim/train_act_hpc.sh)
 /outputs/
 logs/

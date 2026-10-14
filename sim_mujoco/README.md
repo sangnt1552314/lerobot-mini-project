@@ -2,11 +2,11 @@
 
 > **SIMULATION ONLY.** Nothing here talks to the real SO-101.
 
-MuJoCo counterpart of [`sim/`](../sim/README.md) (Isaac Sim). Isaac Sim needs an RTX GPU to render
+Replaces the Isaac Sim pipeline this repo started with (removed). Isaac Sim needs an RTX GPU to render
 cameras; this cluster has only H100/H200, which MuJoCo renders on with EGL. Same task and dataset
-format as `sim/`: front + wrist cameras 640×480 @ 30 fps, `observation.state` (6), `action` (6, absolute
+format as that pipeline: front + wrist cameras 640×480 @ 30 fps, `observation.state` (6), `action` (6, absolute
 joint targets), `robot_type=so101_follower`, task **"Lift the red cube."** (or the object's task). ACT
-training uses the same `sim/train_act_hpc.sh`.
+training: [`sim/train_act_hpc.sh`](../sim/README.md).
 
 ## Setups and objects
 
@@ -68,7 +68,7 @@ Log: `logs/mujoco_pipeline/<jobid>.log`. Eval writes
 | Control | 30 Hz, 6 physics substeps; position actuators of the model |
 | Units | arm joints: MJCF joint range → −100..100; gripper: range → 0..100 (0 = closed) |
 | Expert | IK on the fingertip site: approach above the object → descend with fingers down and jaws aligned to a cube face (cylinder: the direction needing the least wrist roll from the start pose) → close → lift (position-only IK, ~13 cm) → hold. ~150–180 frames (5–6 s) |
-| Success | object centre > 0.10 m above the table for 5 steps (Isaac task: 0.20 m above the base; the SO-101 cannot lift that high near its base while gripping from above) |
+| Success | object centre > 0.10 m above the table for 5 steps (the Isaac task used 0.20 m above the base; the SO-101 cannot lift that high near its base while gripping from above) |
 | Eval | 12 s time-out; seeds from 100000 (generation uses 0, 1, 2, …) |
 
 All tunables are in [`so101_liftcube/config.py`](so101_liftcube/config.py).
@@ -81,9 +81,8 @@ and `sim/hpc_env.sh` sets `LD_LIBRARY_PATH`, `__EGL_VENDOR_LIBRARY_FILENAMES` an
 Tested on an H200 node: hardware OpenGL (`NVIDIA H200/PCIe/SSE2`), ~190 frames/s at 640×480. OSMesa is
 not available in the image.
 
-## Differences from the Isaac version
+## Notes
 
-- Different renderer and scene look, so a policy trained here will not transfer to the Isaac eval or the
-  real robot without retraining.
-- Units are a linear map of the MJCF joint ranges, not LeRobot's motor calibration.
-- Lower success height (above).
+- Units are a linear map of the MJCF joint ranges, not LeRobot's motor calibration;
+  `local/run_act_policy.py` converts between the two on the real arm.
+- Success height 0.10 m (above).

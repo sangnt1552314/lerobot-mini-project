@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-time setup of the ACT *training-only* environment on the NUS HPC (no Isaac Sim here).
+# One-time setup of the ACT training environment on the NUS HPC (+ MuJoCo: sim_mujoco/setup_hpc.sh).
 #
 #   qsub pbs/setup_act_env.pbs              # as a batch job (needs internet on the compute node)
 #   bash sim/setup_hpc_train.sh             # login node or `qsub -I`; re-execs itself in the container
@@ -15,7 +15,7 @@
 #   4. Checks: versions, GPU, imports used by training/inference, AV1 encode + decode with pyav and
 #      torchcodec. Writes a report to logs/setup_act_env/report.txt.
 #
-# Does not touch sim/setup.sh, the leisaac_sim conda env, or the server venv (my_lebot).
+# Does not touch the server venv (my_lebot).
 
 set -euo pipefail
 

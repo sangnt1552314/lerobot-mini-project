@@ -1,11 +1,2 @@
-"""Out-of-tree LeIsaac tasks for this repository.
-
-Importing this package registers the Gym ids below. It only imports gymnasium, so it is
-safe to import before Isaac Sim starts; the env config itself is loaded lazily by
-isaaclab_tasks.utils.parse_env_cfg after the AppLauncher is up.
-"""
-
-from . import lift_cube_dualcam  # noqa: F401
-from .lift_cube_dualcam import TASK_ID
-
-__all__ = ["TASK_ID"]
+"""ACT inference helper (act_policy.LocalACTPolicy), shared by sim_mujoco/scripts/eval_act.py and
+local/run_act_policy.py. The Isaac Sim (LeIsaac) task that used to live in this package was removed."""

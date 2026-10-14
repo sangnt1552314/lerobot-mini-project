@@ -1,4 +1,4 @@
-"""Run a trained LeRobot ACT checkpoint in-process (no Isaac imports, so it is testable alone).
+"""Run a trained LeRobot ACT checkpoint in-process (needs only LeRobot, so it is testable alone).
 
 Same steps as LeRobot 0.4.2's lerobot.utils.control_utils.predict_action (used by lerobot-record):
 ACTPolicy.from_pretrained, the pre/post-processors saved next to the weights (normalisation stats from

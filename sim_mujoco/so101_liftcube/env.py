@@ -1,5 +1,5 @@
-"""MuJoCo SO-101 Lift (a cube or a cylinder) with a front and a wrist camera (counterpart of the Isaac
-LeIsaac-SO101-LiftCube-DualCam-v0 task in sim/). SIMULATION ONLY.
+"""MuJoCo SO-101 Lift (a cube or a cylinder) with a front and a wrist camera (the dataset format of the
+original Isaac LeIsaac-SO101-LiftCube-DualCam-v0 task). SIMULATION ONLY.
 
 Robot: MuJoCo Menagerie `robotstudio_so101` (Apache-2.0), loaded unchanged; the table, object, walls,
 front camera and lights are added with MjSpec. One env step = one 30 Hz camera/dataset frame.

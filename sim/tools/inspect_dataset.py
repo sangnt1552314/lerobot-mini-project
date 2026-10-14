@@ -7,7 +7,7 @@ camera is missing, a dimension is wrong, values contain NaN, the actions never c
 there are fewer than --min-episodes episodes. Saves the first/middle/last frame of
 episode 0 from both cameras to --out-dir.
 
-Needs only LeRobot (no Isaac Sim).
+Needs only LeRobot.
 """
 
 import argparse

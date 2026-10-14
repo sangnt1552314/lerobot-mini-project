@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Train LeRobot 0.4.2 ACT on one H200 of the NUS HPC (training only; data comes from the RTX machine).
+# Train LeRobot 0.4.2 ACT on one H200 of the NUS HPC (data from sim_mujoco/scripts/generate.py; pbs/mujoco_pipeline.pbs runs both).
 # Works inside a PBS job (pbs/train_act_h200.pbs) and in an interactive `qsub -I` shell; when started
 # outside the Singularity image it re-runs itself inside it. Env built by sim/setup_hpc_train.sh.
 #
@@ -109,7 +109,7 @@ case "$VIDEO_BACKEND" in
     *) die "VIDEO_BACKEND must be pyav or torchcodec" ;;
 esac
 
-[ -f "$DATASET_ROOT/meta/info.json" ] || die "No LeRobot dataset at $DATASET_ROOT (copy it from the RTX machine, see sim/README.md)."
+[ -f "$DATASET_ROOT/meta/info.json" ] || die "No LeRobot dataset at $DATASET_ROOT (generate it first: pbs/mujoco_pipeline.pbs)."
 [ -f "$DATASET_ROOT/SYNTHETIC_DATA_NOT_REAL.txt" ] && warn "$DATASET_ROOT is the SYNTHETIC test dataset; this checkpoint is for plumbing tests only."
 
 TRAIN_ROOT="$DATASET_ROOT"

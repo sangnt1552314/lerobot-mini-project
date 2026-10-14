@@ -27,7 +27,7 @@ import numpy as np
 
 HERE = Path(__file__).resolve()
 sys.path.insert(0, str(HERE.parents[1]))                      # sim_mujoco/
-sys.path.insert(0, str(HERE.parents[2] / "sim"))              # sim/ -> leisaac_ext (no Isaac imports)
+sys.path.insert(0, str(HERE.parents[2] / "sim"))              # sim/ -> leisaac_ext.act_policy
 from so101_liftcube import OBJECTS, ROBOT_TYPE, LiftCubeConfig, LiftCubeEnv, PROFILES, make_config  # noqa: E402
 
 

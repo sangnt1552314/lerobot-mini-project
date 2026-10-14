@@ -1,9 +1,9 @@
-"""Load an ACT checkpoint the way sim/scripts/eval_act.py does and run it on a dummy observation.
+"""Load an ACT checkpoint the way sim_mujoco/scripts/eval_act.py does and run it on a dummy observation.
 
     python sim/tools/test_act_checkpoint.py outputs/act_liftcube_h200/checkpoints/last/pretrained_model
 
 Checks the files eval needs are present, loads them with LocalACTPolicy (sim/leisaac_ext/act_policy.py,
-no Isaac imports), feeds state (6,) float32 + front/wrist (480, 640, 3) uint8, and checks that a finite
+LeRobot only), feeds state (6,) float32 + front/wrist (480, 640, 3) uint8, and checks that a finite
 (6,) action comes back. Says nothing about policy quality.
 """
 
@@ -35,7 +35,7 @@ def main() -> None:
     if missing:
         sys.exit(f"FAIL: missing {missing}")
 
-    from leisaac_ext.act_policy import LocalACTPolicy  # same import as sim/scripts/eval_act.py
+    from leisaac_ext.act_policy import LocalACTPolicy  # same import as sim_mujoco/scripts/eval_act.py
 
     policy = LocalACTPolicy(ckpt, device=args.device)
     print(f"cameras    {policy.camera_keys}\nstate_dim  {policy.state_dim}")

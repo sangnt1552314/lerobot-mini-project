@@ -1,5 +1,4 @@
-"""All tunables of the MuJoCo SO-101 Lift task in one place (the counterpart of
-sim/configs/lift_cube_dualcam.yaml for the Isaac version).
+"""All tunables of the MuJoCo SO-101 Lift task in one place.
 
 A config is a physical setup (profile: start pose, cameras, table, lighting) combined with an object
 to lift: make_config(profile, obj). Each combination is its own dataset and its own policy.
