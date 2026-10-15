@@ -50,7 +50,8 @@ def main() -> None:
         t_render += time.perf_counter() - t0
         n_frames += len(expert)
         ok += env.is_success()
-        print(f"episode {ep}: {'SUCCESS' if env.is_success() else 'FAILED'} ({len(expert)} frames, object z {env.object_pos[2]:.3f})")
+        print(f"episode {ep}: {'SUCCESS' if env.is_success() else 'FAILED'} ({len(expert)} frames, object "
+              f"{200 * env.object_half_width:.1f} x {200 * env.object_half_height:.1f} cm, z {env.object_pos[2]:.3f})")
         if ep == 0:
             snaps["end"] = obs
             for name, o in snaps.items():

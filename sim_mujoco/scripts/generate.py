@@ -63,6 +63,7 @@ def main() -> None:
 
     max_attempts = args.max_attempts or 3 * args.num_demos + 10
     saved = attempts = 0
+    episodes = []   # seed and object size of each saved episode
     t0 = time.time()
     while saved < args.num_demos and attempts < max_attempts:
         seed = args.seed + attempts
@@ -74,8 +75,9 @@ def main() -> None:
             action = expert.action(t)
             frames.append({**obs, "action": action, "task": cfg.obj.task})
             obs = env.step(action)
+        size = f"{200 * env.object_half_width:.1f} x {200 * env.object_half_height:.1f} cm"   # width/diameter x height
         if not env.is_success():
-            print(f"attempt {attempts} (seed {seed}): FAILED (object z {env.object_pos[2]:.3f}), dropped", flush=True)
+            print(f"attempt {attempts} (seed {seed}, {size}): FAILED (object z {env.object_pos[2]:.3f}), dropped", flush=True)
             if saved == 0 and attempts >= 20:
                 sys.exit(f"the expert failed the first {attempts} attempts of --profile {args.profile} --object "
                          f"{args.object}: this setup cannot do this object (e.g. the setup's gripper_closed leaves the "
@@ -85,7 +87,9 @@ def main() -> None:
             ds.add_frame(f)
         ds.save_episode()
         saved += 1
-        print(f"attempt {attempts} (seed {seed}): SUCCESS, episode {saved}/{args.num_demos} saved "
+        episodes.append({"seed": seed, "object_width_m": round(2 * env.object_half_width, 4),
+                         "object_height_m": round(2 * env.object_half_height, 4)})
+        print(f"attempt {attempts} (seed {seed}, {size}): SUCCESS, episode {saved}/{args.num_demos} saved "
               f"({len(frames)} frames, {time.time() - t0:.0f}s elapsed)", flush=True)
     ds.stop_image_writer()
     ds.finalize()
@@ -101,6 +105,7 @@ def main() -> None:
         "attempts": attempts, "saved": saved,
         "expert_success_rate": saved / max(attempts, 1), "config": dataclasses.asdict(cfg),
         "mjcf": str(os.environ.get("SO101_MJCF", "sim_mujoco/third_party/mujoco_menagerie/robotstudio_so101/so101.xml")),
+        "episodes": episodes,
     }, indent=2))
     print(f"\nsaved {saved}/{args.num_demos} episodes in {attempts} attempts "
           f"(expert success rate {100 * saved / max(attempts, 1):.1f}%), {time.time() - t0:.0f}s -> {root}")

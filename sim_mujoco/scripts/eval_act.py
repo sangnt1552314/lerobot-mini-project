@@ -132,12 +132,15 @@ def main() -> None:
             obs = env.step(action)
             max_z = max(max_z, float(env.object_pos[2]))
         ok = env.is_success()
-        episodes.append({"episode": ep, "seed": seed, "success": ok, "steps": env.steps, "max_object_z": round(max_z, 4)})
-        print(f"[eval] episode {ep + 1}/{args.episodes} seed {seed}: {'SUCCESS' if ok else 'FAILED '} "
-              f"after {env.steps} steps (max object z {max_z:.3f} m)", flush=True)
+        width, height = 200 * env.object_half_width, 200 * env.object_half_height   # cm (width or diameter)
+        episodes.append({"episode": ep, "seed": seed, "success": ok, "steps": env.steps, "max_object_z": round(max_z, 4),
+                         "object_width_cm": round(width, 2), "object_height_cm": round(height, 2)})
+        print(f"[eval] episode {ep + 1}/{args.episodes} seed {seed} ({width:.1f} x {height:.1f} cm): "
+              f"{'SUCCESS' if ok else 'FAILED '} after {env.steps} steps (max object z {max_z:.3f} m)", flush=True)
         if frames:
             video_dir.mkdir(parents=True, exist_ok=True)
-            save_video(frames, video_dir / f"episode_{ep:03d}_{'success' if ok else 'fail'}.mp4", cfg.fps)
+            name = f"episode_{ep:03d}_{width:.1f}x{height:.1f}cm_{'success' if ok else 'fail'}.mp4"
+            save_video(frames, video_dir / name, cfg.fps)
 
     n_ok = sum(e["success"] for e in episodes)
     summary = {

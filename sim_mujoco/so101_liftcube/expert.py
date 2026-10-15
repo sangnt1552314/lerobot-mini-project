@@ -96,7 +96,7 @@ class ScriptedLiftExpert:
     def plan(self) -> None:
         c, env, r = self.cfg, self.env, self.env.rng
         obj, yaw = env.object_pos, env.object_yaw
-        grasp_z = obj[2] - c.obj.grasp_depth
+        grasp_z = obj[2] - env.grasp_depth
         hover_z = obj[2] + c.hover_height
         high_z = hover_z + c.approach_clearance
 
@@ -119,7 +119,7 @@ class ScriptedLiftExpert:
 
         def grasp_path(rot):
             # the object centre sits on the jaw axis between the jaws: shift the fingertips along it
-            tip_xy = obj[:2] - c.obj.in_site_z * rot[:2, 2]
+            tip_xy = obj[:2] - env.in_site_z * rot[:2, 2]
             # good IK seed: the model's own top-down pickup pose
             seed = np.array([np.arctan2(tip_xy[1], tip_xy[0]), 0.0, 0.47, 1.18, 1.58, c.gripper_open])
             q_high, e_high = self.ik.solve(seed, np.array([*tip_xy, high_z]), rot, iters=500)

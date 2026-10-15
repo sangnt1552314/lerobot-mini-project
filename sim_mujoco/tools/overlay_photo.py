@@ -62,7 +62,7 @@ def main() -> None:
     env.data.qpos[env.qadr] = q
     xy = args.object_xy or [np.mean(cfg.object_x), np.mean(cfg.object_y)]
     a = env.object_qadr
-    env.data.qpos[a : a + 7] = [*xy, cfg.obj.half_height, 1.0, 0.0, 0.0, 0.0]
+    env.data.qpos[a : a + 7] = [*xy, env.object_half_height, 1.0, 0.0, 0.0, 0.0]
     wr = cfg.appearance.wrist_fovy_range
     if args.wrist_fovy or wr:
         env.model.cam_fovy[env.wrist_cam] = args.wrist_fovy or float(np.mean(wr))

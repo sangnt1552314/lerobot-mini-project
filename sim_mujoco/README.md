@@ -19,11 +19,19 @@ A sim config is a physical **setup** (`--profile`: start pose, cameras, table, l
 | `real` | home setup, first rough model: white robot, wood table, curtain (fitted 2026-10-12) |
 | `home` | home setup, refitted 2026-10-14 to [`assets/home/photo_front.png`](assets/home/photo_front.png) at the start pose (+ the folded pose) with the joints read from the arm: glossy reddish-brown table, front webcam in front, left of centre; per-camera colour (the front webcam is darker and more saturated); same start pose and expert as `real` |
 | `office` | office setup: black robot, light wood desk, wall on its right, front webcam on the front-left (fitted 2026-10-14 to [`assets/office/photo_front.png`](assets/office/photo_front.png) + [`photo_wrist.png`](assets/office/photo_wrist.png)) |
+| `office2` | office setup rebuilt 2026-10-15: office arm, light wood desk ending ~31 cm in front of the base, no wall, webcam on a stand 34 cm above the work area looking down. Fitted to photos with the arm moved through 9 poses (overhead camera: robot silhouette; wrist camera: the jaw's silhouette, which showed the real wrist camera is mounted 9° further forward and is wide-angle). Objects of random size (below). Start pose arm frame [0, -57.3, 22.9, 88.8, 93.0], gripper 79 (fingertips 15 cm up; both cameras see the whole square) |
 
 | `--object` | object |
 |---|---|
 | `cube` | red 3 cm cube, "Lift the red cube." |
 | `cylinder` | small red tube (Ø 1.45 cm, 2.8 cm tall) on a Ø 2.1 cm flange, "Lift the red cylinder." The jaws touch it at ~9 (gripper units), so the office expert closes to 8: fine on the office arm (`--gripper-floor 8`), too tight for the home arm (`real` + `cylinder` fails: its gripper floor is 15) |
+
+With `--profile office2` the objects are random per episode instead (`RANDOM_SIZE_OBJECTS` in config.py): a red
+cube of side 2-5 cm or a red cylinder of Ø 2-6 cm and 3-7 cm tall, anywhere in a 5 × 5 cm square centred 18 cm in
+front of the base (x 0.155-0.205 m, y ±0.025 m, yaw ±45°). Expert success (100 episodes each): cube 100 %;
+cylinder 77 % (Ø 2-4 cm 100 %, 4-5 cm 94 %, 5-6 cm 19 %: the moving jaw meets a wide round object at ~33° and it
+twists out), so few demos have cylinders wider than 5 cm. On the real desk the square is under the folded arm's
+gripper: move the arm to the start pose first, then put the object down (see below).
 
 Adding a setup: take photos at the start pose (`local/capture_setup.py` saves both cameras and the joint
 values), add a function to `SETUPS` in [`so101_liftcube/config.py`](so101_liftcube/config.py), and line the
@@ -50,6 +58,23 @@ for p in home:cube office:cube office:cylinder; do qsub -v PROFILE=${p%%:*},OBJE
 
 The second line continues `outputs/act_home_cube`, `act_office_cube` and `act_office_cylinder` to 100k steps
 (add `EVAL_FREQ=5000` to evaluate more often; each 50-episode eval takes ~6 min).
+
+The office2 policies (300 demos, 16 eval videos, 100k steps; datasets `so101_office2_{cube,cylinder}`, runs
+`outputs/act_office2_{cube,cylinder}`):
+
+```bash
+qsub -v PROFILE=office2,OBJECT=cylinder pbs/mujoco_test.pbs    # optional 30-min check first
+for o in cube cylinder; do qsub -v PROFILE=office2,OBJECT=$o,NUM_DEMOS=300,EVAL_VIDEOS=16,STEPS=100000 pbs/mujoco_pipeline.pbs; done
+```
+
+On the office arm (copy `outputs/act_office2_cube` to the laptop):
+
+```bash
+bash local/run_office.sh act_office2_cube control --wait-for-object
+```
+
+It moves the arm to the start pose and holds it there until Enter: put the object in the square (centre 18 cm in
+front of the base) meanwhile. (Not two runs: connecting turns the torque off briefly, which drops a raised arm.)
 
 On the robot laptop, copy `outputs/act_<profile>_<object>/checkpoints/last/pretrained_model` from the HPC and
 run `python local/run_act_policy.py --profile office --object cylinder --gripper-floor 8 --checkpoint ...`.

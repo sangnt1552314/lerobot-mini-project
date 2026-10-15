@@ -24,7 +24,8 @@ class CameraConfig:
 
 @dataclass
 class ObjectConfig:
-    """The object to lift, spawned upright on the table at a random x, y and yaw."""
+    """The object to lift, spawned upright on the table at a random x, y and yaw (and size, with the _range
+    fields: the env then derives the expert's grasp_depth / in_site_z from the size of each episode)."""
 
     name: str = "cube"
     shape: str = "box"                      # "box", or "cylinder" (upright; any jaw direction grips it)
@@ -39,6 +40,11 @@ class ObjectConfig:
     grasp_depth: float = 0.007              # fingertips this far below the object centre when grasping
     in_site_z: float = -0.004               # object centre on the jaw axis in the gripper site frame (fixed jaw at -0.02)
     task: str = "Lift the red cube."        # dataset task string
+    # per-episode size, uniform (None = the fixed size above). A box with half_width_range is a cube of random
+    # side; a cylinder also needs half_height_range. The mass then comes from density.
+    half_width_range: tuple[float, float] | None = None
+    half_height_range: tuple[float, float] | None = None
+    density: float = 400.0                  # kg/m^3 (hollow plastic / light wood): 5 cm cube 50 g
 
 
 @dataclass
@@ -48,6 +54,23 @@ class Wall:
     axis: str
     offset: float
     rgba: tuple[float, float, float, float] = (0.6, 0.6, 0.6, 1.0)
+
+
+@dataclass
+class Prop:
+    """Visual-only background object (no collisions), e.g. a camera stand. Per episode its position
+    is jittered and, with p_present < 1, it is sometimes left out."""
+
+    name: str
+    shape: str                              # "box" (size = half extents) or "cylinder" (size = radius, half height)
+    size: tuple[float, ...]
+    pos: tuple[float, float, float]
+    yaw_deg: float = 0.0
+    pitch_deg: float = 0.0                  # about the prop's own y axis, after the yaw
+    rgba: tuple[float, float, float, float] = (0.5, 0.5, 0.5, 1.0)
+    pos_jitter: tuple[float, float, float] = (0.0, 0.0, 0.0)   # +- uniform per episode
+    p_present: float = 1.0
+    at_far_edge: bool = False               # pos x is relative to the table's far edge (Appearance.table_far_edge)
 
 
 @dataclass
@@ -61,6 +84,8 @@ class Appearance:
     floor_rgba: tuple[float, float, float, float] | None = None   # plain floor instead (no floor_texture)
     floor_z: float = -0.03                  # visual only; a desk's real floor is ~0.75 m down
     walls: tuple[Wall, ...] = ()
+    props: tuple[Prop, ...] = ()
+    table_far_edge: tuple[float, float] | None = None   # x of the table's far edge, uniform per episode (visual)
     table_center: tuple[float, float] = (0.0, 0.0)
     table_half: tuple[float, float] = (1.0, 1.0)
     texture_repeat: tuple[float, float] = (8.0, 8.0)
@@ -72,10 +97,12 @@ class Appearance:
     camera_gain: dict[str, tuple[float, float, float]] = field(default_factory=dict)
     camera_saturation: dict[str, float] = field(default_factory=dict)
     object_rgba: tuple[float, float, float, float] | None = None   # the object's colour under this setup's light
+    object_tint_jitter: float = 0.0          # +- multiplicative per RGB channel of the object (different reds)
     # per-episode randomization (0 = off)
     tint_jitter: float = 0.0                 # +- multiplicative per RGB channel: table, floor, walls, robot
     light_jitter: float = 0.0                # +- fraction of light intensity
     light_dir_jitter: float = 0.0            # +- per component of each light's direction
+    shadow_prob: float = 1.0                 # chance per episode that the key light casts shadows
     front_fovy_jitter_deg: float = 0.0
     wrist_fovy_range: tuple[float, float] | None = None   # None = model's 61 deg
     camera_gain_jitter: float = 0.0          # +- per RGB channel of each camera's gain (white balance)
@@ -94,6 +121,8 @@ class LiftCubeConfig:
     front: CameraConfig = field(default_factory=lambda: CameraConfig(pos=(0.60, 0.0, 0.42), lookat=(0.17, 0.0, 0.02)))
     camera_jitter_pos: float = 0.01         # +- uniform per episode, front camera only
     camera_jitter_deg: float = 1.5
+    wrist_cam_rot_deg: tuple[float, float, float] = (0.0, 0.0, 0.0)   # extra rotation of the model's wrist camera
+                                            # in its own frame (x, y, z): a real camera mounted at another angle
 
     # the object and its spawn region in front of the robot
     obj: ObjectConfig = field(default_factory=ObjectConfig)
@@ -150,6 +179,14 @@ OBJECTS = {
         base_half_height=0.002, mass=0.004, grasp_depth=0.005, in_site_z=-0.02 + 0.0105 + 0.001,
         task="Lift the red cylinder.",
     ),
+}
+
+
+# Objects of a random size per episode (setups that use them pick them by name in their make_config function).
+RANDOM_SIZE_OBJECTS = {
+    "cube": ObjectConfig(half_width_range=(0.010, 0.025)),                                  # side 2-5 cm
+    "cylinder": ObjectConfig(name="cylinder", shape="cylinder", task="Lift the red cylinder.",
+                             half_width_range=(0.010, 0.030), half_height_range=(0.015, 0.035)),   # dia 2-6 cm, 3-7 cm tall
 }
 
 
@@ -287,7 +324,63 @@ def _home(cfg: LiftCubeConfig) -> LiftCubeConfig:
     )
 
 
-SETUPS = {"default": lambda cfg: cfg, "real": _real, "office": _office, "home": _home}
+def _office2(cfg: LiftCubeConfig) -> LiftCubeConfig:
+    """Office setup rebuilt on 2026-10-15: the office arm (my_follower) on the light wood desk, a webcam on a stand
+    almost straight above the work area, the arm's wrist camera, no wall. Fitted to photos taken with the arm
+    moved through 9 poses (assets/office2/: the start pose). The scene has no object of its own: each episode
+    spawns a red cube (side 2-5 cm) or cylinder (dia 2-6 cm, 3-7 cm tall) of random size anywhere in a 5 x 5 cm
+    square centred 18 cm in front of the base (x 0.155-0.205, y +-0.025, yaw +-45 deg). That square is under the
+    folded arm's gripper: put the object down once the arm is at the start pose."""
+    office, home = _office(cfg), _home(cfg)
+    if cfg.obj.name not in RANDOM_SIZE_OBJECTS:
+        raise ValueError(f"office2 has no random-size {cfg.obj.name!r}; use one of {tuple(RANDOM_SIZE_OBJECTS)}")
+    return replace(
+        office,
+        # not the home start pose: that has the fingertips 3.5 cm above the objects, inside a tall one. Here they are
+        # 15 cm up at (0.19, 0, 0.15), fingers tilted 36 deg so that at the start the overhead webcam sees the whole
+        # square past the gripper and the wrist camera sees it too, with >= 1 cm between the arm and the biggest
+        # object / its own links at any start noise. Wrist roll and open gripper as home.
+        # Arm frame deg [0, -57.3, 22.9, 88.8, 93.0], gripper 79
+        home_qpos=(0.0, -1.0, 0.4, 1.55, 1.6226, 1.3421),
+        home_noise=home.home_noise,
+        # webcam 34 cm above the table, looking down and back at the robot; fitted 2026-10-15 to the robot's
+        # silhouette in 9 photos at poses read from the arm (folded, start, fingertips over the square's corners:
+        # IoU 0.79-0.92). It sees the table up to x ~0.22, so the square is centred at x 0.18
+        front=CameraConfig(pos=(0.2312, -0.0424, 0.3353), lookat=(0.1394, -0.0014, 0.0527), fovy_deg=36.5, roll_deg=16.1),
+        camera_jitter_pos=0.02,
+        camera_jitter_deg=3.0,
+        # the real wrist camera sits 9 deg further forward than the model's and is wide-angle: fitted to the jaw's
+        # silhouette in 6 wrist photos (IoU 0.92 vs 0.64 unchanged; pinhole fovy 101)
+        wrist_cam_rot_deg=(9.1, 1.0, 1.2),
+        obj=replace(RANDOM_SIZE_OBJECTS[cfg.obj.name]),
+        object_x=(0.155, 0.205),
+        object_y=(-0.025, 0.025),
+        object_yaw_deg=45.0,
+        appearance=replace(
+            office.appearance,
+            # seen by the wrist camera at the start pose (2026-10-15 photos, positions from its rays): the desk ends
+            # ~31 cm in front of the base (randomized 28-42 cm), a light room beyond, and the overhead webcam's stand
+            # clamped to that edge on the right. The old office wall is gone; nothing else stays in the scene.
+            walls=(Wall("x", 1.3, (0.80, 0.84, 0.88, 1.0)),),
+            floor_rgba=(0.62, 0.64, 0.66, 1.0),
+            table_center=(0.132, 0.175),
+            table_half=(0.228, 0.625),           # x -0.096..far edge, y -0.45..0.80
+            table_far_edge=(0.28, 0.42),
+            props=(
+                Prop("stand_pole", "cylinder", (0.011, 0.20), (0.03, -0.28, 0.13), rgba=(0.04, 0.04, 0.04, 1.0),
+                     pos_jitter=(0.02, 0.04, 0.0), at_far_edge=True),
+            ),
+            camera_gain={"front": (0.817, 0.874, 0.797)},   # fitted on the table in the 2026-10-15 photos;
+            camera_gain_jitter=0.08,                         # the wrist camera matches without a gain
+            front_fovy_jitter_deg=3.0,
+            wrist_fovy_range=(94.0, 108.0),
+            shadow_prob=0.3,                      # diffuse office light: the photos show only faint shadows
+            object_tint_jitter=0.15,
+        ),
+    )
+
+
+SETUPS = {"default": lambda cfg: cfg, "real": _real, "office": _office, "home": _home, "office2": _office2}
 PROFILES = tuple(SETUPS)                    # the scripts' --profile choices
 
 

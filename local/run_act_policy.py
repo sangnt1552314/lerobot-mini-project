@@ -326,6 +326,9 @@ def main():
     parser.add_argument("--sanity-pad-deg", type=float, default=15.0, help="Margin around training actions")
     parser.add_argument("--n-action-steps", type=int, default=None, help="Re-plan every N steps (default: 100)")
     parser.add_argument("--skip-home", action="store_true", help="control mode: don't move to the sim start pose first")
+    parser.add_argument("--wait-for-object", action="store_true",
+                        help="control mode: after homing, hold the start pose until Enter (put the object down then; "
+                             "the office2 square is under the folded gripper)")
     parser.add_argument("--home-speed", type=float, default=45.0, help="Joint speed while homing, deg/s")
     parser.add_argument("--hold-wrist-roll", action="store_true",
                         help="Never rotate wrist_roll (homing and policy); protects the wrist camera cable")
@@ -369,6 +372,8 @@ def main():
     try:
         if robot and args.mode == "control" and not args.skip_home:
             go_home(robot, args)
+            if args.wait_for_object:  # the servos hold the start pose meanwhile
+                input("at the start pose: put the object down, then press Enter to run the policy (Ctrl+C stops) ")
 
         current = robot.state() if robot else sim_units_to_real(sim_rad_to_units(SIM_HOME_RAD))
         state_u = real_to_sim_units(current)
