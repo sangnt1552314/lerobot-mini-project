@@ -29,7 +29,9 @@ against the checkpoint's own training range (stop if outside), the gripper is cl
 --gripper-floor (default local/safety.ARM_LIMITS: the home arm stalls below ~15; the office arm's
 calibration closes at ~0, and its cylinder policy closes to 8), joints move at most --max-speed deg/s
 (--home-speed while homing), and if a joint lags its command by more than --track-limit for 0.5 s
-(e.g. blocked) the arm is told to hold and the run stops. Ctrl+C stops. Keep a hand near the arm.
+(e.g. blocked) the arm is told to hold and the run stops. It also stops (holding) before any target that would bring
+the wrist camera mount within --min-camera-clearance (office2: 35 mm, sim model) of the arm. Ctrl+C stops. Keep a
+hand near the arm.
 """
 
 import argparse
@@ -118,6 +120,24 @@ def infer_sim_setup(checkpoint: Path):
 
 # Start pose (rad) of the training episodes; set from the checkpoint's profile in main().
 SIM_HOME_RAD = load_sim_config("default").home_qpos
+# arm-frame target -> distance (m) from the wrist camera mount to the arm; set in main() (None = no check)
+CAMERA_GUARD = None
+
+
+def make_camera_guard(profile: str, obj: str):
+    """Distance from the wrist camera mount to the base / shoulder / upper / lower arm at an arm-frame target, in the
+    sim_mujoco model (needs MuJoCo, which the lerobot env has). Used to stop before the camera hits the arm."""
+    sys.path.insert(0, str(REPO_ROOT / "sim_mujoco"))
+    from so101_liftcube import LiftCubeEnv, make_config
+    from so101_liftcube.expert import CameraClearance
+
+    clearance = CameraClearance(LiftCubeEnv(make_config(profile, obj), render=False))
+
+    def guard(target):
+        q = [math.radians((v - OFFSET_DEG[n]) / SIGN[n]) for n, v in zip(JOINT_ORDER[:5], target[:5])]
+        return clearance(np.array(q + [0.0]))
+
+    return guard
 
 
 def sim_units_to_real(u):
@@ -223,6 +243,14 @@ def crop_to_aspect(frame, aspect=4 / 3):
     return frame
 
 
+def warm_up(cameras, seconds=1.5):
+    """Stream for a moment before the first real frame: the office RealSense's first ~1 s of frames are
+    overexposed (almost white) until its auto-exposure settles."""
+    t_end = time.time() + seconds
+    while time.time() < t_end:
+        cameras.capture()
+
+
 def read_rgb(cameras, size=(640, 480)):
     wrist_bgr, front_bgr = cameras.capture()
     out = {}
@@ -282,6 +310,10 @@ def go_home(robot, args):
     current = robot.state()
     if args.hold_wrist_roll:
         target[4] = current[4]
+    if target[1] < -85.0 and abs(target[4] - current[4]) > 20.0:
+        # folded start pose (office2): rolling the wrist there sweeps the wrist camera along the arm and the table
+        sys.exit(f"The start pose is folded with wrist_roll {target[4]:.0f} deg but the wrist is at {current[4]:.0f}: "
+                 f"turn it by hand to ~{target[4]:.0f} (camera facing away from the arm), then run again.")
     print(f"go-home from {fmt(current)}\n          to   {fmt(target)}  at {args.home_speed:.0f} deg/s")
     sp = Setpoint(robot, args.track_limit)
     stages = [("arm", [0, 1, 2, 3]), ("wrist_roll", [4]), ("gripper", [5])]
@@ -292,6 +324,9 @@ def go_home(robot, args):
         while True:
             measured = robot.state()
             cmd = sp.step(target, args.home_speed, measured, joints)
+            if CAMERA_GUARD is not None and 1000 * CAMERA_GUARD(cmd) < args.min_camera_clearance:
+                robot.send(measured)
+                raise Stuck(f"homing would bring the wrist camera within {1000 * CAMERA_GUARD(cmd):.0f} mm of the arm")
             robot.send(cmd)
             if all(abs(cmd[i] - target[i]) < 1e-6 for i in joints):
                 deadline = deadline or time.time() + 3.0
@@ -332,6 +367,10 @@ def main():
     parser.add_argument("--home-speed", type=float, default=45.0, help="Joint speed while homing, deg/s")
     parser.add_argument("--hold-wrist-roll", action="store_true",
                         help="Never rotate wrist_roll (homing and policy); protects the wrist camera cable")
+    parser.add_argument("--min-camera-clearance", type=float, default=None,
+                        help="stop if a target would bring the wrist camera mount closer than this (mm, in the sim "
+                             "model; the real camera is bulkier) to the arm. Default: the profile's "
+                             "min_camera_clearance (office2: 35; older profiles: 0 = no check)")
     parser.add_argument("--track-limit", type=float, default=20.0,
                         help="Abort if a joint lags its command by more than this (deg) for 0.5 s")
     parser.add_argument("--keep-torque", action="store_true", help="Leave torque on at exit so the arm holds")
@@ -346,9 +385,14 @@ def main():
     profile = args.profile or inferred[0]
     obj = args.object or inferred[1]
 
-    global SIM_HOME_RAD
+    global SIM_HOME_RAD, CAMERA_GUARD
     sim_cfg = load_sim_config(profile, obj)
     SIM_HOME_RAD = sim_cfg.home_qpos
+    if args.min_camera_clearance is None:
+        args.min_camera_clearance = 1000 * sim_cfg.min_camera_clearance
+    if args.min_camera_clearance > 0:
+        CAMERA_GUARD = make_camera_guard(profile, obj)
+        print(f"wrist camera guard: stop before any target within {args.min_camera_clearance:.0f} mm of the arm")
     task = sim_cfg.obj.task
     print(f"profile {profile}, object {obj} ('{task}'): start pose (sim rad) {[round(v, 3) for v in SIM_HOME_RAD]}")
 
@@ -366,6 +410,7 @@ def main():
 
         print(f"follower port={args.port} id={args.robot_id}")
         cameras = CameraManager(wrist_id=args.wrist_cam, third_id=args.front_cam)
+        warm_up(cameras)
         robot = Follower(args.port, args.robot_id, args.keep_torque)
         robot.connect()
 
@@ -424,6 +469,14 @@ def main():
             if args.hold_wrist_roll:
                 goal[4] = hold_roll
             command = sp.step(goal, args.max_speed, current)
+            gap = 1000 * CAMERA_GUARD(command) if CAMERA_GUARD is not None else np.inf
+            if gap < args.min_camera_clearance:
+                if moving:
+                    robot.send(current)
+                    print(f"step {step}: STOP, the wrist camera would come within {gap:.0f} mm of the arm "
+                          f"(--min-camera-clearance {args.min_camera_clearance:.0f}); holding")
+                    break
+                print(f"step {step}: wrist camera {gap:.0f} mm from the arm (control mode would stop)")
 
             if step % 15 == 0:
                 print(f"step {step:4d} state {fmt(current)}  target {fmt(target)}  send {fmt(command)}")

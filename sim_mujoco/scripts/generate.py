@@ -76,6 +76,10 @@ def main() -> None:
             frames.append({**obs, "action": action, "task": cfg.obj.task})
             obs = env.step(action)
         size = f"{200 * env.object_half_width:.1f} x {200 * env.object_half_height:.1f} cm"   # width/diameter x height
+        if not expert.safe:  # the plan brings the wrist camera too close to the arm (setup's min_camera_clearance)
+            print(f"attempt {attempts} (seed {seed}, {size}): UNSAFE (wrist camera {1000 * expert.min_clearance:.0f} mm "
+                  f"from the arm), dropped", flush=True)
+            continue
         if not env.is_success():
             print(f"attempt {attempts} (seed {seed}, {size}): FAILED (object z {env.object_pos[2]:.3f}), dropped", flush=True)
             if saved == 0 and attempts >= 20:

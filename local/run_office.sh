@@ -2,7 +2,7 @@
 # Office arm (my_follower) with any sim policy (office, home, ...); its start pose and object come from the policy.
 #
 #   bash local/run_office.sh act_office_cylinder             # home, then run the policy (keep a hand near the arm)
-#   bash local/run_office.sh act_office2_cube control --wait-for-object   # office2: object down once the arm is up
+#   bash local/run_office.sh act_office2_cube_v2             # office2: starts folded with the wrist at -87.6 deg
 #   bash local/run_office.sh act_office_cube preview         # cameras + model only, the arm never moves
 #   bash local/run_office.sh outputs/act_office_cube control --seconds 10   # extra flags go to run_act_policy.py
 #

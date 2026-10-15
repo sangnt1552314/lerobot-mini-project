@@ -153,6 +153,10 @@ class LiftCubeConfig:
     approach_clearance: float = 0.0         # approach to hover_height + this, then lower to hover (extra phase)
     t_lower: float = 0.5                    # duration of that extra lowering phase
     collision_aware_grasp: bool = False     # try the other grasp directions if the descent self-collides
+    grasp_near_start_roll: bool = False     # grasp with the wrist roll closest to the start pose's (any box face / any
+                                            # cylinder direction), so the wrist camera stays on the side it starts on
+    min_camera_clearance: float = 0.0       # m; > 0: a plan bringing the wrist camera mount closer than this to the base,
+                                            # shoulder, upper or lower arm is marked unsafe (generate.py drops it)
 
     appearance: Appearance = field(default_factory=Appearance)
 
@@ -329,20 +333,21 @@ def _office2(cfg: LiftCubeConfig) -> LiftCubeConfig:
     stand almost straight above the work area (OpenCV index 1), the wrist camera (index 0), no wall. Fitted to
     photos taken with the arm moved through 9 poses (assets/office2/: start pose and folded). The scene has no
     object of its own: each episode spawns a red cube (side 2-5 cm) or cylinder (dia 2-6 cm, 3-7 cm tall) of random
-    size anywhere in a 5 x 5 cm square centred 18 cm in front of the base (x 0.155-0.205, y +-0.025, yaw +-45 deg).
-    That square is under the folded arm's gripper: put the object down once the arm is at the start pose."""
+    size anywhere in a 5 x 5 cm square centred 18 cm in front of the base and 9 cm to its left (x 0.155-0.205,
+    y 0.065-0.115, yaw +-45 deg), next to the folded gripper. Start pose: folded, wrist rolled to -87.6 deg."""
     office, home = _office(cfg), _home(cfg)
     if cfg.obj.name not in RANDOM_SIZE_OBJECTS:
         raise ValueError(f"office2 has no random-size {cfg.obj.name!r}; use one of {tuple(RANDOM_SIZE_OBJECTS)}")
     return replace(
         office,
-        # not the home start pose: that has the fingertips 3.5 cm above the objects, inside a tall one. Here they are
-        # 15 cm up at (0.19, 0, 0.15), fingers tilted 36 deg so that at the start the overhead webcam sees the whole
-        # square past the gripper and the wrist camera sees it too, with >= 1 cm between the arm and the biggest
-        # object / its own links at any start noise. Wrist roll and open gripper as home.
-        # Arm frame deg [0, -57.3, 22.9, 88.8, 93.0], gripper 79
-        home_qpos=(0.0, -1.0, 0.4, 1.55, 1.6226, 1.3421),
-        home_noise=home.home_noise,
+        # the arm's folded rest pose with the wrist rolled to -87.6 deg, read from the arm 2026-10-15 (the user's pose:
+        # arm frame [7.5, -97.5, 93.2, 70.0, -87.6], gripper 0). With the old +93 deg roll the wrist camera faced the
+        # arm and touched it in the policies' motions (grasps near the base fold the wrist); rolled 180 deg it faces
+        # away: >= 48 mm from the arm in every expert demo (model geometry; the real camera is bulkier)
+        home_qpos=(0.1309, -1.7017, 1.6266, 1.2217, -1.5289, -0.1745),
+        home_noise=0.04,
+        grasp_near_start_roll=True,
+        min_camera_clearance=0.035,
         # "front" camera = an Intel RealSense D435 (its RGB stream) on a stand 31 cm above the table, looking down and
         # back at the robot. Pose fitted 2026-10-15 to the robot's silhouette in 9 photos at poses read from the arm
         # (folded, start, fingertips over the square's corners: IoU 0.82-0.95), with the D435's 42.5 deg vertical
@@ -355,8 +360,10 @@ def _office2(cfg: LiftCubeConfig) -> LiftCubeConfig:
         # silhouette in 6 wrist photos (IoU 0.92 vs 0.64 unchanged; pinhole fovy 101)
         wrist_cam_rot_deg=(9.1, 1.0, 1.2),
         obj=replace(RANDOM_SIZE_OBJECTS[cfg.obj.name]),
+        # beside the folded gripper (which covers x 0.10-0.21, y -0.04..0.03), on the robot's left, where the
+        # overhead camera sees it
         object_x=(0.155, 0.205),
-        object_y=(-0.025, 0.025),
+        object_y=(0.065, 0.115),
         object_yaw_deg=45.0,
         appearance=replace(
             office.appearance,

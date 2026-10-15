@@ -19,7 +19,7 @@ A sim config is a physical **setup** (`--profile`: start pose, cameras, table, l
 | `real` | home setup, first rough model: white robot, wood table, curtain (fitted 2026-10-12) |
 | `home` | home setup, refitted 2026-10-14 to [`assets/home/photo_front.png`](assets/home/photo_front.png) at the start pose (+ the folded pose) with the joints read from the arm: glossy reddish-brown table, front webcam in front, left of centre; per-camera colour (the front webcam is darker and more saturated); same start pose and expert as `real` |
 | `office` | office setup: black robot, light wood desk, wall on its right, front webcam on the front-left (fitted 2026-10-14 to [`assets/office/photo_front.png`](assets/office/photo_front.png) + [`photo_wrist.png`](assets/office/photo_wrist.png)) |
-| `office2` | office setup rebuilt 2026-10-15: office arm, light wood desk ending ~31 cm in front of the base, no wall, a RealSense D435 (RGB, OpenCV index 1) on a stand 31 cm above the work area looking down ([`assets/office2/`](assets/office2/): start pose, where the gripper is close and out of focus, and folded). Fitted to photos with the arm moved through 9 poses (overhead camera: robot silhouette; wrist camera: the jaw's silhouette, which showed the real wrist camera is mounted 9° further forward and is wide-angle). Objects of random size (below). Start pose arm frame [0, -57.3, 22.9, 88.8, 93.0], gripper 79 (fingertips 15 cm up; both cameras see the whole square) |
+| `office2` | office setup rebuilt 2026-10-15: office arm, light wood desk ending ~31 cm in front of the base, no wall, a RealSense D435 (RGB, OpenCV index 1) on a stand 31 cm above the work area looking down ([`assets/office2/`](assets/office2/): start pose, where the gripper is close and out of focus, and folded). Fitted to photos with the arm moved through 9 poses (overhead camera: robot silhouette; wrist camera: the jaw's silhouette, which showed the real wrist camera is mounted 9° further forward and is wide-angle). Objects of random size (below). Start pose: the folded rest pose with the wrist rolled to -87.6°, arm frame [7.5, -97.5, 93.2, 70.0, -87.6], gripper 0 (read from the arm 2026-10-15): the wrist camera faces away from the arm; with the earlier +93° roll it touched the arm |
 
 | `--object` | object |
 |---|---|
@@ -28,10 +28,11 @@ A sim config is a physical **setup** (`--profile`: start pose, cameras, table, l
 
 With `--profile office2` the objects are random per episode instead (`RANDOM_SIZE_OBJECTS` in config.py): a red
 cube of side 2-5 cm or a red cylinder of Ø 2-6 cm and 3-7 cm tall, anywhere in a 5 × 5 cm square centred 18 cm in
-front of the base (x 0.155-0.205 m, y ±0.025 m, yaw ±45°). Expert success (100 episodes each): cube 100 %;
-cylinder 77 % (Ø 2-4 cm 100 %, 4-5 cm 94 %, 5-6 cm 19 %: the moving jaw meets a wide round object at ~33° and it
-twists out), so few demos have cylinders wider than 5 cm. On the real desk the square is under the folded arm's
-gripper: move the arm to the start pose first, then put the object down (see below).
+front of the base and 9 cm to its left, next to the folded gripper (x 0.155-0.205 m, y 0.065-0.115 m, yaw ±45°).
+The expert grasps with the wrist roll nearest the start's (`grasp_near_start_roll`) and drops any plan bringing the
+wrist camera mount within 35 mm of the arm (`min_camera_clearance`; none do: >= 47 mm in every demo). Expert success
+(80 episodes each): cube 100 %; cylinder 79 % (Ø 2-4 cm 100 %, 4-5 cm 90 %, 5-6 cm 35 %: the moving jaw meets a wide
+round object at ~33° and it twists out), so few demos have cylinders wider than 5 cm.
 
 Adding a setup: take photos at the start pose (`local/capture_setup.py` saves both cameras and the joint
 values), add a function to `SETUPS` in [`so101_liftcube/config.py`](so101_liftcube/config.py), and line the
@@ -59,22 +60,24 @@ for p in home:cube office:cube office:cylinder; do qsub -v PROFILE=${p%%:*},OBJE
 The second line continues `outputs/act_home_cube`, `act_office_cube` and `act_office_cylinder` to 100k steps
 (add `EVAL_FREQ=5000` to evaluate more often; each 50-episode eval takes ~6 min).
 
-The office2 policies (300 demos, 16 eval videos, 100k steps; datasets `so101_office2_{cube,cylinder}`, runs
-`outputs/act_office2_{cube,cylinder}`):
+The office2 policies (300 demos, 16 eval videos, 100k steps). `_v2`: the folded start pose of 2026-10-15; the
+first `so101_office2_*` / `act_office2_*` were made with a raised start pose that put the wrist camera against the arm,
+so they must not be reused (the pipeline would resume them) or run on the arm:
 
 ```bash
-qsub -v PROFILE=office2,OBJECT=cylinder pbs/mujoco_test.pbs    # optional 30-min check first
-for o in cube cylinder; do qsub -v PROFILE=office2,OBJECT=$o,NUM_DEMOS=300,EVAL_VIDEOS=16,STEPS=100000 pbs/mujoco_pipeline.pbs; done
+for o in cube cylinder; do qsub -v PROFILE=office2,OBJECT=$o,NUM_DEMOS=300,EVAL_VIDEOS=16,STEPS=100000,DATASET_NAME=so101_office2_${o}_v2,OUTPUT_DIR=outputs/act_office2_${o}_v2 pbs/mujoco_pipeline.pbs; done
 ```
 
-On the office arm (copy `outputs/act_office2_cube` to the laptop):
+On the office arm (copy `outputs/act_office2_cube_v2` to the laptop): fold the arm, turn the wrist to about -88°
+(camera facing away from the arm; the script refuses to roll the wrist while folded), put the object in the square
+(18 cm in front of the base, 9 cm to its left), then
 
 ```bash
-bash local/run_office.sh act_office2_cube control --wait-for-object
+bash local/run_office.sh act_office2_cube_v2
 ```
 
-It moves the arm to the start pose and holds it there until Enter: put the object in the square (centre 18 cm in
-front of the base) meanwhile. (Not two runs: connecting turns the torque off briefly, which drops a raised arm.)
+`local/run_act_policy.py` stops and holds before any target that would bring the wrist camera mount within 35 mm of
+the arm (office2's `min_camera_clearance`, checked in the MuJoCo model; `--min-camera-clearance` overrides).
 
 On the robot laptop, copy `outputs/act_<profile>_<object>/checkpoints/last/pretrained_model` from the HPC and
 run `python local/run_act_policy.py --profile office --object cylinder --gripper-floor 8 --checkpoint ...`.

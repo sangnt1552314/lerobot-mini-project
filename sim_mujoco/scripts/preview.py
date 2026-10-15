@@ -51,7 +51,9 @@ def main() -> None:
         n_frames += len(expert)
         ok += env.is_success()
         print(f"episode {ep}: {'SUCCESS' if env.is_success() else 'FAILED'} ({len(expert)} frames, object "
-              f"{200 * env.object_half_width:.1f} x {200 * env.object_half_height:.1f} cm, z {env.object_pos[2]:.3f})")
+              f"{200 * env.object_half_width:.1f} x {200 * env.object_half_height:.1f} cm, z {env.object_pos[2]:.3f}"
+              + (f", wrist camera >= {1000 * expert.min_clearance:.0f} mm from the arm{'' if expert.safe else ' UNSAFE'}"
+                 if np.isfinite(expert.min_clearance) else "") + ")")
         if ep == 0:
             snaps["end"] = obs
             for name, o in snaps.items():
