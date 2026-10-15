@@ -325,12 +325,12 @@ def _home(cfg: LiftCubeConfig) -> LiftCubeConfig:
 
 
 def _office2(cfg: LiftCubeConfig) -> LiftCubeConfig:
-    """Office setup rebuilt on 2026-10-15: the office arm (my_follower) on the light wood desk, a webcam on a stand
-    almost straight above the work area, the arm's wrist camera, no wall. Fitted to photos taken with the arm
-    moved through 9 poses (assets/office2/: the start pose). The scene has no object of its own: each episode
-    spawns a red cube (side 2-5 cm) or cylinder (dia 2-6 cm, 3-7 cm tall) of random size anywhere in a 5 x 5 cm
-    square centred 18 cm in front of the base (x 0.155-0.205, y +-0.025, yaw +-45 deg). That square is under the
-    folded arm's gripper: put the object down once the arm is at the start pose."""
+    """Office setup rebuilt on 2026-10-15: the office arm (my_follower) on the light wood desk, a RealSense D435 on a
+    stand almost straight above the work area (OpenCV index 1), the wrist camera (index 0), no wall. Fitted to
+    photos taken with the arm moved through 9 poses (assets/office2/: start pose and folded). The scene has no
+    object of its own: each episode spawns a red cube (side 2-5 cm) or cylinder (dia 2-6 cm, 3-7 cm tall) of random
+    size anywhere in a 5 x 5 cm square centred 18 cm in front of the base (x 0.155-0.205, y +-0.025, yaw +-45 deg).
+    That square is under the folded arm's gripper: put the object down once the arm is at the start pose."""
     office, home = _office(cfg), _home(cfg)
     if cfg.obj.name not in RANDOM_SIZE_OBJECTS:
         raise ValueError(f"office2 has no random-size {cfg.obj.name!r}; use one of {tuple(RANDOM_SIZE_OBJECTS)}")
@@ -343,10 +343,12 @@ def _office2(cfg: LiftCubeConfig) -> LiftCubeConfig:
         # Arm frame deg [0, -57.3, 22.9, 88.8, 93.0], gripper 79
         home_qpos=(0.0, -1.0, 0.4, 1.55, 1.6226, 1.3421),
         home_noise=home.home_noise,
-        # webcam 34 cm above the table, looking down and back at the robot; fitted 2026-10-15 to the robot's
-        # silhouette in 9 photos at poses read from the arm (folded, start, fingertips over the square's corners:
-        # IoU 0.79-0.92). It sees the table up to x ~0.22, so the square is centred at x 0.18
-        front=CameraConfig(pos=(0.2312, -0.0424, 0.3353), lookat=(0.1394, -0.0014, 0.0527), fovy_deg=36.5, roll_deg=16.1),
+        # "front" camera = an Intel RealSense D435 (its RGB stream) on a stand 31 cm above the table, looking down and
+        # back at the robot. Pose fitted 2026-10-15 to the robot's silhouette in 9 photos at poses read from the arm
+        # (folded, start, fingertips over the square's corners: IoU 0.82-0.95), with the D435's 42.5 deg vertical
+        # field of view. It sees the table up to x ~0.22-0.26, so the square is centred at x 0.18. Its focus is
+        # fixed: the gripper is blurred when it is close to the camera (e.g. at the start pose)
+        front=CameraConfig(pos=(0.2221, -0.0397, 0.3138), lookat=(0.1328, 0.0018, 0.0304), fovy_deg=42.5, roll_deg=18.2),
         camera_jitter_pos=0.02,
         camera_jitter_deg=3.0,
         # the real wrist camera sits 9 deg further forward than the model's and is wide-angle: fitted to the jaw's
