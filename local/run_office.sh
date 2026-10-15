@@ -4,7 +4,6 @@
 #   bash local/run_office.sh act_office_cylinder             # home, then run the policy (keep a hand near the arm)
 #   bash local/run_office.sh act_office2_cube_v2             # office2: starts folded with the wrist at -87.6 deg
 #   bash local/run_office.sh act_office_cube preview         # cameras + model only, the arm never moves
-#   bash local/run_office.sh outputs/act_office_cube control --seconds 10   # extra flags go to run_act_policy.py
 #
 # Overrides: PORT, GRIPPER_FLOOR. FOLLOWER_PORT from a .env is ignored on purpose, so the other arm's port can't be
 # picked up. Run inside `conda activate lerobot`.

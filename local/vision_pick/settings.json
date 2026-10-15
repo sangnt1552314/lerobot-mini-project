@@ -1,0 +1,63 @@
+{
+  "arms": {
+    "home": {
+      "port": "/dev/tty.usbmodem5C821064861",
+      "robot_id": "home_follower",
+      "gripper_floor": 15,
+      "third_cam": 0,
+      "wrist_cam": 1
+    },
+    "office": {
+      "port": "/dev/tty.usbmodem5B610366661",
+      "robot_id": "my_follower",
+      "gripper_floor": 8,
+      "third_cam": 1,
+      "wrist_cam": 0
+    }
+  },
+  "detection": {
+    "hue_max": 5,
+    "sat_min": 150,
+    "val_min": 150,
+    "min_area_px": 150,
+    "max_area_px": 15000,
+    "min_fill": 0.6,
+    "max_aspect": 2.0
+  },
+  "cube": {
+    "size_m": 0.03
+  },
+  "grasp": {
+    "grasp_offset_x_m": 0.0,
+    "grasp_offset_y_m": 0.0,
+    "grasp_offset_z_m": 0.0,
+    "approach_height_m": 0.06,
+    "lift_height_m": 0.08,
+    "step_m": 0.02,
+    "open_pct": 90,
+    "squeeze_pct": 10,
+    "min_table_clearance_m": 0.01,
+    "workspace_margin_m": 0.02
+  },
+  "motion": {
+    "speed_deg_s": 45,
+    "slow_speed_deg_s": 25,
+    "gripper_speed_pct_s": 100,
+    "fps": 30,
+    "track_limit_deg": 20,
+    "arrive_tol_deg": 3.0,
+    "settle_s": 0.6
+  },
+  "checks": {
+    "min_points": 5,
+    "max_loo_cm": 1.5,
+    "max_height_spread_cm": 2.5,
+    "max_table_z_cm": 2.5,
+    "ik_pos_tol_m": 0.005,
+    "grasp_tilt_tol_deg": 10,
+    "travel_tilt_tol_deg": 30,
+    "stable_frames": 5,
+    "max_jitter_px": 4,
+    "max_shift_px": 10
+  }
+}

@@ -3,7 +3,7 @@
 # Those scripts set ROBOT_ID, PORT and GRIPPER_FLOOR (properties of the arm), then exec this. Any policy runs on
 # any arm: its start pose and task come from the sim setup it was trained on.
 #
-#   bash local/run_policy.sh <policy> [control|preview] [extra run_act_policy.py flags]
+#   bash local/run_policy.sh <policy> [control|preview]
 #
 # <policy>: a run dir or pretrained_model dir, as a path or just its name under outputs/ (act_office_cube).
 # The policy's sim profile and object come from its training data (see run_act_policy.py --checkpoint).
@@ -15,7 +15,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT="${SCRIPT_NAME:-$0}"
 
 if [ $# -eq 0 ] || [ "$1" = "control" ] || [ "$1" = "preview" ]; then
-    echo "usage: bash $SCRIPT <policy> [control|preview] [extra flags]   (default: control)" >&2
+    echo "usage: bash $SCRIPT <policy> [control|preview]   (default: control)" >&2
     echo "policies in outputs/: $(cd "$REPO_ROOT/outputs" 2>/dev/null && ls -d act_* 2>/dev/null | tr '\n' ' ')" >&2
     exit 1
 fi
@@ -39,4 +39,4 @@ python -c "import importlib.util as u, sys; sys.exit(not (u.find_spec('lerobot')
 echo "$ROBOT_ID on $PORT, policy $POLICY, $MODE"
 cd "$REPO_ROOT/local"
 exec python run_act_policy.py --mode "$MODE" --checkpoint "$POLICY" --gripper-floor "$GRIPPER_FLOOR" \
-    --robot-id "$ROBOT_ID" --port "$PORT" "$@"
+    --robot-id "$ROBOT_ID" --port "$PORT"

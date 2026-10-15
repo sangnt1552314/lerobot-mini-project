@@ -28,6 +28,9 @@
 #   VIDEO_BACKEND     [pyav]   KEEP_CHECKPOINTS [0 = keep every SAVE_FREQ checkpoint]   WANDB_ENABLE [false]
 #   CHECKPOINT_FPS    [30]  fps of the pretrained checkpoint's data (so101_act_cotrain: 30), for the fps check
 #   ALLOW_INCOMPATIBLE [0]  1 = fine-tune even if the dataset check finds a mismatch with the checkpoint
+#   EPISODES_FILE     []  JSON with a "train" list of episode indices (local/collect_act.py writes
+#                     <dataset>/collect/split.json): train on those only, the others stay held out for
+#                     scripts/eval_act_offline.py. A file, because qsub -v splits values on commas.
 # Extra arguments go straight to lerobot-train (e.g. --policy.chunk_size=50 for a scratch run).
 
 set -euo pipefail
@@ -128,6 +131,12 @@ else
     EXTRA=(--policy.optimizer_lr="$LR" --policy.optimizer_lr_backbone="$LR"
            --dataset.image_transforms.enable="$IMAGE_TRANSFORMS")
     [ -n "$PREP_DIR" ] && export POLICY_PATH="$PREP_DIR"
+    if [ -n "${EPISODES_FILE:-}" ]; then
+        TRAIN_EPISODES="$(python3 -c 'import json, sys; print(json.dumps(json.load(open(sys.argv[1]))["train"]).replace(" ", ""))' \
+            "$(abspath "$EPISODES_FILE")")" || die "can't read a \"train\" list from EPISODES_FILE=$EPISODES_FILE"
+        info "training on episodes $TRAIN_EPISODES (from $EPISODES_FILE)"
+        EXTRA+=(--dataset.episodes="$TRAIN_EPISODES")
+    fi
 fi
 mkdir -p "$(dirname "$OUTPUT_DIR")"
 bash "$REPO_ROOT/sim/train_act_hpc.sh" "$STEPS" ${EXTRA[@]+"${EXTRA[@]}"} "$@"

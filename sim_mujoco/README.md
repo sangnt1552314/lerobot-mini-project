@@ -68,19 +68,18 @@ so they must not be reused (the pipeline would resume them) or run on the arm:
 for o in cube cylinder; do qsub -v PROFILE=office2,OBJECT=$o,NUM_DEMOS=300,EVAL_VIDEOS=16,STEPS=100000,DATASET_NAME=so101_office2_${o}_v2,OUTPUT_DIR=outputs/act_office2_${o}_v2 pbs/mujoco_pipeline.pbs; done
 ```
 
-On the office arm (copy `outputs/act_office2_cube_v2` to the laptop): fold the arm, turn the wrist to about -88°
-(camera facing away from the arm; the script refuses to roll the wrist while folded), put the object in the square
-(18 cm in front of the base, 9 cm to its left), then
+On the office arm (copy `outputs/act_office2_cube_v2` to the laptop): put the object in the square (18 cm in front
+of the base, 9 cm to its left), then
 
 ```bash
 bash local/run_office.sh act_office2_cube_v2
 ```
 
-`local/run_act_policy.py` stops and holds before any target that would bring the wrist camera mount within 35 mm of
-the arm (office2's `min_camera_clearance`, checked in the MuJoCo model; `--min-camera-clearance` overrides).
+It homes to the start pose (wrist rolled to -87.6°) and runs the policy. The real arm does not check wrist camera
+clearance; only the sim expert does (`min_camera_clearance`).
 
-On the robot laptop, copy `outputs/act_<profile>_<object>/checkpoints/last/pretrained_model` from the HPC and
-run `python local/run_act_policy.py --profile office --object cylinder --gripper-floor 8 --checkpoint ...`.
+On the robot laptop, copy `outputs/act_<profile>_<object>` from the HPC into `outputs/` and run
+`bash local/run_office.sh act_<profile>_<object>` (or `run_home.sh` on the home arm).
 
 Re-submitting is safe: an existing dataset is reused and an existing `OUTPUT_DIR` is resumed.
 `qsub pbs/mujoco_test.pbs` is a 30-minute plumbing test on throwaway data.

@@ -195,7 +195,86 @@ line above on the login node via `bash sim/hpc_env.sh env HF_HUB_OFFLINE=0 pytho
 `logs/train_act/<jobid>.log`. Copy `outputs/<run>/checkpoints/last/pretrained_model` to the laptop and pass it to
 `run_act.py --checkpoint`.
 
-### Optional fallback without learning
+### Pickup without learning: `local/vision_pick`
 
-`local/cube_fallback.py`: red-cube detection (OpenCV) + a camera->table map calibrated by touching the cube with the
-gripper + inverse kinematics. `detect`, `calibrate`, `verify`, then `run` (plan only) / `run --execute`.
+Red-cube detection (OpenCV) + a camera->table homography calibrated by touching the cube with the gripper + top-down
+inverse kinematics, run locally on the real arm. From the repo root: `python -m local.vision_pick --mode
+detect|calibrate|preview|control [--arm home|office]`. Full steps: [local/vision_pick/README.md](local/vision_pick/README.md).
+(`local/cube_fallback.py` is the earlier single-file version; vision_pick reuses its kinematics.)
+
+### ACT demonstrations from vision_pick (no leader arm)
+
+`local/collect_act.py` records demonstrations with the vision_pick controller. You place the cube and press Enter;
+the arm picks and lifts it; you press `s` to keep the episode. It needs a vision_pick calibration
+(`python -m local.vision_pick --mode calibrate`). Start the first session with the arm folded at rest.
+
+```bash
+python local/collect_act.py --episodes 50     # resumes where the last session stopped; never overwrites
+python local/collect_act.py --step            # debug: Enter before each planned move, nothing recorded
+```
+
+**Each session**
+- Type `yes` once to enable control mode.
+- Each Enter then runs one whole episode, recorded at every control step: detect → plan → above the cube → open →
+  down → close → lift → hold 1 s.
+- After it: `s` save, `r` discard and retry at the same spot, `f` mark failed, `q` quit. Either way the arm puts the
+  cube back and returns to the start pose.
+- **Ctrl+C** stops at once with the arm holding. A blocked joint stops the episode, holds, then backs up to the start
+  pose on Enter.
+
+**Start pose:** the arm's pose when the first session starts, saved in `collect/session.json` and reused for every
+episode and every later session.
+
+**Variety:** a 3 × 3 count of saved cube positions points to the emptiest area. A cube within 1.5 cm of a saved
+position, or outside the calibrated area, asks before running.
+
+**Recording rate:** each episode reports the rate it recorded at. Below 27 fps or with a long gap, retry it. Dim
+light lowers webcam fps.
+
+**Dataset:** `~/.cache/huggingface/lerobot/local/so101_redcube_lift`, LeRobot v3.0 at 30 fps.
+- `observation.state`: measured joints. `action`: the command actually sent after the safety checks. Both in LeRobot
+  degrees with the gripper 0..100, named `shoulder_pan.pos` … `gripper.pos`.
+- `observation.images.world` (third-person) and `observation.images.wrist`: 480×640, prepared exactly as
+  `local/run_act.py` feeds the policy.
+- Task: "Pick up the red cube and lift it."
+- Every saved episode is finalized on disk immediately, so a crash loses at most the episode being recorded.
+- `collect/attempts.jsonl` logs every attempt (cube position, outcome, recorded fps), with images of failures.
+- `collect/split.json` holds the 45/5 split; validation is episodes 9, 19, 29, 39, 49.
+
+Checked with a mock arm and fake cameras (not yet on the real arm): sessions with save / retry / failed / quit,
+resume, a blocked joint, step mode. `scripts/check_act_dataset.py --strict` gives PASS against
+`omiya239532/so101_act_cotrain`.
+
+**After collecting** (the script prints these with your values):
+
+1. **Validate.** The "every arm value is within ±100" warning is the checker's heuristic; this dataset is in
+   degrees.
+   ```bash
+   python scripts/check_act_dataset.py --repo-id local/so101_redcube_lift --checkpoint omiya239532/so101_act_cotrain --strict
+   ```
+2. **Copy to Hopper.** The dataset was written with LeRobot 0.6.1 on the laptop and Hopper trains with 0.4.2, so
+   run the check there once before submitting:
+   ```bash
+   rsync -av ~/.cache/huggingface/lerobot/local/so101_redcube_lift/ <you>@<hopper login>:/scratch/e1583535/datasets/lerobot/local/so101_redcube_lift/
+   # on the Hopper login node, in the repo:
+   bash sim/hpc_env.sh env HF_HUB_OFFLINE=0 python scripts/check_act_dataset.py --repo-id local/so101_redcube_lift \
+       --root /scratch/e1583535/datasets/lerobot/local/so101_redcube_lift --checkpoint omiya239532/so101_act_cotrain --strict
+   ```
+3. **Fine-tune on the 45 training episodes.** Running the same command with `STEPS=30000` continues the run. The
+   output goes to `outputs/act_so101_redcube_lift_finetune`.
+   ```bash
+   qsub -v DATASET_REPO_ID=local/so101_redcube_lift,EPISODES_FILE=/scratch/e1583535/datasets/lerobot/local/so101_redcube_lift/collect/split.json,STEPS=10000 pbs/train_act.pbs
+   ```
+4. **Check on the 5 held-out episodes.** Copy `outputs/act_so101_redcube_lift_finetune/checkpoints/last/pretrained_model`
+   back to the same path on the laptop, then run the command below. It compares the policy's action 1 s ahead with
+   simply holding still.
+   ```bash
+   python scripts/eval_act_offline.py --checkpoint outputs/act_so101_redcube_lift_finetune
+   ```
+5. **Evaluate on the robot.** On the home rig the third-person camera is index 0 and the wrist camera index 1. Use
+   the start pose from `collect/session.json`. Score real pickups over about 10 cube positions inside the calibrated
+   area.
+   ```bash
+   cd local && python run_act.py --checkpoint ../outputs/act_so101_redcube_lift_finetune --mode control \
+       --front-cam 0 --wrist-cam 1 --gripper-floor 15 --start-pose=<start_pose from collect/session.json>
+   ```

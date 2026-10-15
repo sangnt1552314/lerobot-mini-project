@@ -232,3 +232,6 @@ logs/
 dataset_checks/
 local/act_calibration/
 local/fallback_calibration/
+
+# vision_pick per-run debug output
+local/vision_pick/runs/

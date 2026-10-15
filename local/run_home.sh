@@ -3,7 +3,6 @@
 #
 #   bash local/run_home.sh act_home_cube                     # home, then run the policy (keep a hand near the arm)
 #   bash local/run_home.sh act_mujoco_real_v2 preview        # cameras + model only, the arm never moves
-#   bash local/run_home.sh act_mujoco_real_v2 control --seconds 10 --hold-wrist-roll   # extra flags go to run_act_policy.py
 #
 # Overrides: PORT, GRIPPER_FLOOR. FOLLOWER_PORT from a .env is ignored on purpose, so the other arm's port can't be
 # picked up. Run inside `conda activate lerobot`.
