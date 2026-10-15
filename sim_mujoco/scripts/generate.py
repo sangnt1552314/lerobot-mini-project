@@ -64,6 +64,7 @@ def main() -> None:
     max_attempts = args.max_attempts or 3 * args.num_demos + 10
     saved = attempts = 0
     episodes = []   # seed and object size of each saved episode
+    failed = []     # the dropped attempts and why
     t0 = time.time()
     while saved < args.num_demos and attempts < max_attempts:
         seed = args.seed + attempts
@@ -77,10 +78,13 @@ def main() -> None:
             obs = env.step(action)
         size = f"{200 * env.object_half_width:.1f} x {200 * env.object_half_height:.1f} cm"   # width/diameter x height
         if not expert.safe:  # the plan brings the wrist camera too close to the arm (setup's min_camera_clearance)
+            failed.append({"seed": seed, "reason": "unsafe", "camera_clearance_m": round(float(expert.min_clearance), 4)})
             print(f"attempt {attempts} (seed {seed}, {size}): UNSAFE (wrist camera {1000 * expert.min_clearance:.0f} mm "
                   f"from the arm), dropped", flush=True)
             continue
         if not env.is_success():
+            failed.append({"seed": seed, "reason": "not_lifted", "object_z_m": round(float(env.object_pos[2]), 4),
+                           "object_xy_m": np.round(env.object_pos[:2], 4).tolist(), "object_width_m": round(2 * env.object_half_width, 4)})
             print(f"attempt {attempts} (seed {seed}, {size}): FAILED (object z {env.object_pos[2]:.3f}), dropped", flush=True)
             if saved == 0 and attempts >= 20:
                 sys.exit(f"the expert failed the first {attempts} attempts of --profile {args.profile} --object "
@@ -95,7 +99,8 @@ def main() -> None:
                          "object_height_m": round(2 * env.object_half_height, 4)})
         print(f"attempt {attempts} (seed {seed}, {size}): SUCCESS, episode {saved}/{args.num_demos} saved "
               f"({len(frames)} frames, {time.time() - t0:.0f}s elapsed)", flush=True)
-    ds.stop_image_writer()
+    if hasattr(ds, "stop_image_writer"):   # LeRobot 0.4.2 (Hopper); 0.6 stops it in finalize()
+        ds.stop_image_writer()
     ds.finalize()
 
     try:
@@ -109,7 +114,7 @@ def main() -> None:
         "attempts": attempts, "saved": saved,
         "expert_success_rate": saved / max(attempts, 1), "config": dataclasses.asdict(cfg),
         "mjcf": str(os.environ.get("SO101_MJCF", "sim_mujoco/third_party/mujoco_menagerie/robotstudio_so101/so101.xml")),
-        "episodes": episodes,
+        "episodes": episodes, "failed_attempts": failed,
     }, indent=2))
     print(f"\nsaved {saved}/{args.num_demos} episodes in {attempts} attempts "
           f"(expert success rate {100 * saved / max(attempts, 1):.1f}%), {time.time() - t0:.0f}s -> {root}")

@@ -205,7 +205,7 @@ class ScriptedLiftExpert:
         q_grasp = traj[-1].copy()
         for s in smoothstep(np.linspace(0, 1, n_close + 1)[1:]):
             traj.append(np.r_[q_grasp[ARM], c.gripper_open + (c.gripper_closed - c.gripper_open) * s])
-        q, seg = ik_line(q, tip_xy, rot, grasp_z, c.lift_height, n_lift, w_rot=0.0)
+        q, seg = ik_line(q, tip_xy, rot, grasp_z, c.table_z + c.lift_height, n_lift, w_rot=0.0)
         traj += [np.r_[qq[ARM], c.gripper_closed] for qq in seg]
         traj += [traj[-1].copy() for _ in range(n_hold)]
         self.plan_q = np.array(traj)

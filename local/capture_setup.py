@@ -1,7 +1,8 @@
 """Capture what a new sim_mujoco profile needs from a physical setup: the start pose and camera photos.
 
     cd local
-    python capture_setup.py --name office --robot-id office_follower --port /dev/tty.usbmodemXXXX
+    python capture_setup.py --name home2                                   # home arm (default port / id)
+    python capture_setup.py --name office3 --robot-id my_follower --port /dev/tty.usbmodem5B610366661
 
 Torque is OFF the whole time: pose the arm by hand into the start pose the policy should begin from
 (gripper open, wrist camera looking at the table), put the red cube in the middle of where it should
@@ -9,8 +10,9 @@ spawn, and press Enter. Each capture saves to local/setup_captures/<name>/<n>_*:
   front.png / wrist.png       640x480 RGB as the policy sees them (centre-cropped to 4:3)
   front_raw.png / wrist_raw.png   full camera resolution, for cutting table/background textures
   pose.json                   arm frame (LeRobot degrees, gripper 0..100) and sim radians (home_qpos)
-Capture a few: the start pose with the cube, and an empty table for textures. Ctrl+C to finish.
-The arm frame -> sim mapping is run_act_policy.py's (SIGN / OFFSET_DEG / MJCF_RANGE).
+Capture a few: the start pose with the cube, the fingertips touching the cube at 3-4 spots, a few other reachable
+poses, and an empty table. q + Enter (or Ctrl+C) to finish. Camera indices and the arm frame -> sim mapping are
+run_act_policy.py's for this --robot-id (ARMS, SIGN / OFFSET_DEG / MJCF_RANGE).
 """
 
 import argparse
@@ -23,7 +25,7 @@ import time
 
 import cv2
 
-from run_act_policy import JOINT_ORDER, LOCAL_DIR, MJCF_RANGE, Follower, crop_to_aspect, fmt, real_to_sim_units
+from run_act_policy import JOINT_ORDER, LOCAL_DIR, MJCF_RANGE, Follower, crop_to_aspect, fmt, real_to_sim_units, use_arm
 
 GRIPPER_FLOOR = 15.0  # the follower stalls below this (local/safety.py ARM_LIMITS)
 
@@ -39,8 +41,8 @@ def sim_units_to_rad(u):
 
 def enter_pressed():
     ready, _, _ = select.select([sys.stdin], [], [], 0)
-    if ready:
-        sys.stdin.readline()
+    if ready and sys.stdin.readline().strip().lower() == "q":
+        raise KeyboardInterrupt
     return bool(ready)
 
 
@@ -49,9 +51,12 @@ def main():
     ap.add_argument("--name", required=True, help="Setup name, e.g. office (becomes the output folder)")
     ap.add_argument("--port", default=os.environ.get("FOLLOWER_PORT", "/dev/tty.usbmodem5C821064861"))
     ap.add_argument("--robot-id", default=os.environ.get("FOLLOWER_ID", "home_follower"))
-    ap.add_argument("--wrist-cam", type=int, default=0)
-    ap.add_argument("--front-cam", type=int, default=1)
+    ap.add_argument("--wrist-cam", type=int, default=None, help="default: run_act_policy.ARMS for --robot-id")
+    ap.add_argument("--front-cam", type=int, default=None)
     args = ap.parse_args()
+    wrist_cam, front_cam = use_arm(args.robot_id)
+    wrist_cam = wrist_cam if args.wrist_cam is None else args.wrist_cam
+    front_cam = front_cam if args.front_cam is None else args.front_cam
 
     from cameras import CameraManager
 
@@ -59,12 +64,12 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     n = len(list(out.glob("*_pose.json")))
 
-    cameras = CameraManager(wrist_id=args.wrist_cam, third_id=args.front_cam)
+    cameras = CameraManager(wrist_id=wrist_cam, third_id=front_cam)
     robot = Follower(args.port, args.robot_id, keep_torque=False)
     robot.connect()
     robot.robot.bus.disable_torque()
     print(f"follower port={args.port} id={args.robot_id}, torque OFF: pose the arm by hand")
-    print(f"saving to {out}. Enter = capture, Ctrl+C = quit\n")
+    print(f"cameras wrist={wrist_cam} front={front_cam}; saving to {out}. Enter = capture, q + Enter = quit\n")
     try:
         last_print = 0.0
         while True:

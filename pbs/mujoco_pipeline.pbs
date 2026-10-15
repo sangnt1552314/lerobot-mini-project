@@ -12,6 +12,7 @@
 #   qsub pbs/mujoco_pipeline.pbs
 #   for p in home:cube office:cube office:cylinder; do qsub -v PROFILE=${p%%:*},OBJECT=${p##*:},STEPS=100000 pbs/mujoco_pipeline.pbs; done
 #   for o in cube cylinder; do qsub -v PROFILE=office2,OBJECT=$o,NUM_DEMOS=300,EVAL_VIDEOS=16,STEPS=100000,DATASET_NAME=so101_office2_${o}_v2,OUTPUT_DIR=outputs/act_office2_${o}_v2 pbs/mujoco_pipeline.pbs; done
+#   qsub -v PROFILE=home2,OBJECT=cube,NUM_DEMOS=100,STEPS=20000,EVAL_FREQ=5000,EVAL_VIDEOS=10 pbs/mujoco_pipeline.pbs   # home rig
 #   qsub -v NUM_DEMOS=200,STEPS=30000,OUTPUT_DIR=outputs/act_mujoco_try2 pbs/mujoco_pipeline.pbs
 #   qsub -v PROFILE=real,DATASET_NAME=so101_liftcube_mujoco_real,OUTPUT_DIR=outputs/act_mujoco_real pbs/mujoco_pipeline.pbs
 #   qsub -v PROFILE=office,OBJECT=cylinder,STEPS=60000 pbs/mujoco_pipeline.pbs

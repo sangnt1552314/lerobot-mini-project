@@ -195,6 +195,54 @@ line above on the login node via `bash sim/hpc_env.sh env HF_HUB_OFFLINE=0 pytho
 `logs/train_act/<jobid>.log`. Copy `outputs/<run>/checkpoints/last/pretrained_model` to the laptop and pass it to
 `run_act.py --checkpoint`.
 
+### Sim-to-real ACT on the home rig (`home2`)
+
+Real photos -> MuJoCo profile `home2` (cameras fitted to the vision_pick demos of 2026-10-15) -> scripted IK demos with
+randomized appearance -> ACT on Hopper -> ACT evaluated in the sim on unseen seeds -> the real arm. Details of the
+profile: [`sim_mujoco/README.md`](sim_mujoco/README.md).
+
+1. Check the rig has not moved (laptop, `conda activate lerobot`). Torque is off: pose the arm by hand, Enter = save,
+   `q` + Enter = quit. Then compare a capture with the sim:
+
+   ```bash
+   python local/capture_setup.py --name home2_check            # home arm: port/id/cameras are the defaults
+   python sim_mujoco/tools/overlay_photo.py --profile home2 --photo local/setup_captures/home2_check/0_front.png \
+       --qpos-deg <arm frame printed for capture 0> --out overlay_front.png      # --camera wrist with 0_wrist.png
+   ```
+
+   Useful captures: the folded start pose, the open gripper just above the cube, the fingertips touching the cube at
+   3-4 spots, 2-3 other reachable poses, the empty table. The robot must overlap in the blend; the table may look
+   different (it is randomized).
+
+2. Sim checks on the laptop (no GPU): `python sim_mujoco/scripts/preview.py --profile home2 --episodes 20`
+   (expert success + what ACT sees in `sim_mujoco/debug/preview/`), and a 10-demo dataset:
+   `python sim_mujoco/scripts/generate.py --num_demos 10 --profile home2 --repo_id local/so101_home2_cube_smoke --root /tmp/home2_smoke`
+   then `python sim/tools/inspect_dataset.py --repo-id local/so101_home2_cube_smoke --root /tmp/home2_smoke --video-backend pyav`.
+
+3. Hopper (repo root, after `git pull`): 100 demos -> ACT 20k steps (batch 8, checkpoints every 5k), a 50-episode sim
+   eval on unseen seeds every 5k with 10 videos:
+
+   ```bash
+   qsub -v PROFILE=home2,OBJECT=cube,NUM_DEMOS=100,STEPS=20000,EVAL_FREQ=5000,EVAL_VIDEOS=10 pbs/mujoco_pipeline.pbs
+   ```
+
+   Dataset `/scratch/e1583535/datasets/lerobot/local/so101_home2_cube`, checkpoints `outputs/act_home2_cube`, results
+   `outputs/act_home2_cube/eval/step_<step>.json` + videos, log `logs/mujoco_pipeline/<jobid>.log`. Re-submitting
+   resumes; `STEPS=40000` continues the same run. Fine-tuning instead of training from scratch: add
+   `POLICY_PATH=<a pretrained_model dir with front/wrist cameras, e.g. outputs/act_home_cube/checkpoints/last/pretrained_model>`
+   (only before the first submission of that OUTPUT_DIR).
+
+4. Real arm: copy `outputs/act_home2_cube` from Hopper to the laptop's `outputs/`, put the cube 15-20 cm in front of
+   the base (up to 5 cm to its right, 7 cm to its left), then
+
+   ```bash
+   bash local/run_home.sh act_home2_cube preview      # cameras + model; prints targets, never moves the arm
+   bash local/run_home.sh act_home2_cube              # control: Enter to start, homes to the start pose, runs the policy
+   ```
+
+   Preview saves what the policy sees to `local/debug_frames/act_{front,wrist}.png`: check front = the third-person
+   view. Camera indices and joint offsets per arm are `ARMS` in `local/run_act_policy.py` (home arm: wrist 1, front 0).
+
 ### Pickup without learning: `local/vision_pick`
 
 Red-cube detection (OpenCV) + a camera->table homography calibrated by touching the cube with the gripper + top-down

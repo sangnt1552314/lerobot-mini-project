@@ -94,6 +94,8 @@ def main() -> None:
             continue
         print(f"\n{key} min  {np.round(values.min(0), 2)}")
         print(f"{key} max  {np.round(values.max(0), 2)}")
+        print(f"{key} mean {np.round(values.mean(0), 2)}")
+        print(f"{key} std  {np.round(values.std(0), 2)}")
         if key == "action":
             if np.allclose(values.std(0), 0.0):
                 errors.append("action is constant across the dataset; the expert never moved")

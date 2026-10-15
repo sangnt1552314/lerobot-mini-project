@@ -48,8 +48,9 @@ def main() -> None:
         front = CameraConfig(pos=tuple(args.cam_pos or front.pos), lookat=tuple(args.cam_lookat or front.lookat),
                              fovy_deg=args.fovy or front.fovy_deg,
                              roll_deg=front.roll_deg if args.cam_roll is None else args.cam_roll)
-    still = dict(tint_jitter=0.0, light_jitter=0.0, light_dir_jitter=0.0, front_fovy_jitter_deg=0.0, camera_gain_jitter=0.0)
-    cfg = dataclasses.replace(cfg, front=front, home_noise=0.0, camera_jitter_pos=0.0, camera_jitter_deg=0.0,
+    still = dict(tint_jitter=0.0, light_jitter=0.0, light_dir_jitter=0.0, front_fovy_jitter_deg=0.0, camera_gain_jitter=0.0,
+                 random_table_textures=0, background_rgb=None, object_tint_jitter=0.0)
+    cfg = dataclasses.replace(cfg, front=front, home_noise=0.0, camera_jitter_pos=0.0, camera_jitter_deg=0.0, wrist_cam_jitter_deg=0.0,
                               appearance=dataclasses.replace(cfg.appearance, **still))
     env = LiftCubeEnv(cfg, render=True)
     env.reset(seed=0)
@@ -62,7 +63,7 @@ def main() -> None:
     env.data.qpos[env.qadr] = q
     xy = args.object_xy or [np.mean(cfg.object_x), np.mean(cfg.object_y)]
     a = env.object_qadr
-    env.data.qpos[a : a + 7] = [*xy, env.object_half_height, 1.0, 0.0, 0.0, 0.0]
+    env.data.qpos[a : a + 7] = [*xy, cfg.table_z + env.object_half_height, 1.0, 0.0, 0.0, 0.0]
     wr = cfg.appearance.wrist_fovy_range
     if args.wrist_fovy or wr:
         env.model.cam_fovy[env.wrist_cam] = args.wrist_fovy or float(np.mean(wr))

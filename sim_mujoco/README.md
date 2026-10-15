@@ -20,6 +20,7 @@ A sim config is a physical **setup** (`--profile`: start pose, cameras, table, l
 | `home` | home setup, refitted 2026-10-14 to [`assets/home/photo_front.png`](assets/home/photo_front.png) at the start pose (+ the folded pose) with the joints read from the arm: glossy reddish-brown table, front webcam in front, left of centre; per-camera colour (the front webcam is darker and more saturated); same start pose and expert as `real` |
 | `office` | office setup: black robot, light wood desk, wall on its right, front webcam on the front-left (fitted 2026-10-14 to [`assets/office/photo_front.png`](assets/office/photo_front.png) + [`photo_wrist.png`](assets/office/photo_wrist.png)) |
 | `office2` | office setup rebuilt 2026-10-15: office arm, light wood desk ending ~31 cm in front of the base, no wall, a RealSense D435 (RGB, OpenCV index 1) on a stand 31 cm above the work area looking down ([`assets/office2/`](assets/office2/): start pose, where the gripper is close and out of focus, and folded). Fitted to photos with the arm moved through 9 poses (overhead camera: robot silhouette; wrist camera: the jaw's silhouette, which showed the real wrist camera is mounted 9° further forward and is wide-angle). Objects of random size (below). Start pose: the folded rest pose with the wrist rolled to -87.6°, arm frame [7.5, -97.5, 93.2, 70.0, -87.6], gripper 0 (read from the arm 2026-10-15): the wrist camera faces away from the arm; with the earlier +93° roll it touched the arm |
+| `home2` | the home rig as used for the vision_pick demos of 2026-10-15 (home arm, third-person webcam OpenCV 0 in front looking down, wide-angle wrist camera 1; [`assets/home2/`](assets/home2/)). Front camera and wrist camera mount fitted to 49 frames of those 26 real demos at the joints read from the arm (robot silhouette, the cube's pixel in both cameras vs where the gripper closed on it, fingertips half-way down the cube at the grasp): no joint offsets (the arm's calibrated ranges match the model's), the table 4.2 cm below the bottom of the base (`table_z`). Real 3 cm cube, randomized 2.6-3.4 cm, task "Pick up the red cube and lift it." Start pose: the demos' folded start, arm frame [1.6, -98.5, 96.9, 72.9, -7.3], gripper 15.5. Appearance randomized instead of copied (random tables, background, light, shadows, cube colour, mass, friction). Expert 50/50. Comparison images: `sim_mujoco/debug/home2_alignment/` (regenerate with `tools/overlay_photo.py --profile home2`) |
 
 | `--object` | object |
 |---|---|
@@ -33,6 +34,15 @@ The expert grasps with the wrist roll nearest the start's (`grasp_near_start_rol
 wrist camera mount within 35 mm of the arm (`min_camera_clearance`; none do: >= 47 mm in every demo). Expert success
 (80 episodes each): cube 100 %; cylinder 79 % (Ø 2-4 cm 100 %, 4-5 cm 90 %, 5-6 cm 35 %: the moving jaw meets a wide
 round object at ~33° and it twists out), so few demos have cylinders wider than 5 cm.
+
+Randomization of the look instead of copying the room (off unless a setup turns it on, so the other setups' data
+stay as they were): `Appearance.random_table_textures` builds that many procedural table textures (low-contrast
+checkers, speckled flat colours, gradients; random colour and scale, never a saturated red) and gives the table one
+of them per episode, or the setup's own texture with `p_own_table`; `background_rgb` gives the floor and walls a
+random colour; `ObjectConfig.friction_range` / `density_range` vary the object's friction and mass;
+`wrist_cam_jitter_deg` tilts the wrist camera a little per episode. Everything follows from the episode seed, so
+`sim_mujoco_generation.json` (config + seed of every saved episode + every dropped attempt and why) reproduces a
+dataset.
 
 Adding a setup: take photos at the start pose (`local/capture_setup.py` saves both cameras and the joint
 values), add a function to `SETUPS` in [`so101_liftcube/config.py`](so101_liftcube/config.py), and line the

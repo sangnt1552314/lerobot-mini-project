@@ -84,11 +84,17 @@ class LiftCubeEnv:
                 dq[1 + axis] = np.sin(half)
                 mujoco.mju_mulQuat(q, q.copy(), dq)
             self.model.cam_quat[self.wrist_cam] = q
+        self.model.cam_pos[self.wrist_cam] += self.cfg.wrist_cam_pos_offset
+        self.wrist_quat0 = self.model.cam_quat[self.wrist_cam].copy()
         self._fovy0 = self.model.cam_fovy.copy()
         ap = self.cfg.appearance
-        tint_names = (["table_mat", *self._painted] + (["floor_mat"] if ap.floor_texture or ap.floor_rgba else [])
-                      + [f"wall{i}_mat" for i in range(len(ap.walls))])
+        table_mats = ["table_mat", *(f"table_rand{i}_mat" for i in range(ap.random_table_textures))]
+        background = ((["floor_mat"] if ap.floor_texture or ap.floor_rgba else []) + [f"wall{i}_mat" for i in range(len(ap.walls))]
+                      + (["plate_mat"] if self.cfg.table_z < 0 else []))
+        tint_names = [*table_mats, *self._painted, *background]
         self._tint0 = {self.model.material(n).id: self.model.mat_rgba[self.model.material(n).id].copy() for n in tint_names}
+        self._table_mats = [self.model.material(n).id for n in table_mats]
+        self._background_mats = [self.model.material(n).id for n in background]
         self._props = [(self.model.geom(f"prop_{pr.name}").id, pr) for pr in ap.props]
         self.table_geom = self.model.geom("table").id
         self._light_diffuse0 = self.model.light_diffuse.copy()
@@ -128,6 +134,7 @@ class LiftCubeEnv:
                                    rgb1=[0.62, 0.55, 0.47], rgb2=[0.56, 0.49, 0.41])
         mat = spec.add_material(name="table_mat", texrepeat=list(ap.texture_repeat), texuniform=True, reflectance=0.0)
         mat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = tex.name
+        self._add_random_table_textures(spec, ap.random_table_textures)
         if ap.floor_texture:
             ftex = spec.add_texture(name="floor_tex", type=mujoco.mjtTexture.mjTEXTURE_2D,
                                     file=str(ASSETS_DIR / ap.floor_texture))
@@ -140,7 +147,11 @@ class LiftCubeEnv:
                          rgb1=[0.75, 0.78, 0.82], rgb2=[0.35, 0.38, 0.42])
 
         wb = spec.worldbody
-        wb.add_geom(name="table", type=mujoco.mjtGeom.mjGEOM_PLANE, pos=[*ap.table_center, 0.0],
+        if c.table_z < 0:  # visual only; its colour is randomized with the background (Appearance.background_rgb)
+            spec.add_material(name="plate_mat", rgba=[0.05, 0.05, 0.05, 1.0], reflectance=0.0)
+            wb.add_geom(name="base_plate", type=mujoco.mjtGeom.mjGEOM_CYLINDER, size=[0.065, -c.table_z / 2, 0.0],
+                        pos=[0.0, 0.0, c.table_z / 2], material="plate_mat", contype=0, conaffinity=0)
+        wb.add_geom(name="table", type=mujoco.mjtGeom.mjGEOM_PLANE, pos=[*ap.table_center, c.table_z],
                     size=[*ap.table_half, 0.05], material="table_mat")
         if ap.floor_texture or ap.floor_rgba:  # visual only, below the table; the object rests on the table plane
             wb.add_geom(name="floor", type=mujoco.mjtGeom.mjGEOM_PLANE, pos=[0.0, 0.0, ap.floor_z], size=[2.0, 2.0, 0.05],
@@ -200,6 +211,33 @@ class LiftCubeEnv:
         wb.add_camera(name="front", pos=list(c.front.pos), quat=list(quat), fovy=c.front.fovy_deg)
         return spec.compile()
 
+    @staticmethod
+    def _add_random_table_textures(spec: mujoco.MjSpec, n: int) -> None:
+        """n procedural table materials table_rand<i>_mat (Appearance.random_table_textures), from a fixed seed so the
+        model is the same every time: low-contrast checkers, speckled flat colours and gradients in random colours
+        and scales, none of them a saturated red like the object."""
+        import colorsys
+
+        r = np.random.default_rng(1234)
+
+        def colour():
+            while True:
+                hue, sat, val = r.uniform(0, 1), r.uniform(0.0, 0.7), r.uniform(0.25, 0.95)
+                if sat < 0.35 or min(hue, 1 - hue) > 0.05:   # not within 18 deg of red unless greyish
+                    return np.array(colorsys.hsv_to_rgb(hue, sat, val))
+
+        for i in range(n):
+            base = colour()
+            other = np.clip(base * r.uniform(0.75, 1.25, 3), 0, 1)
+            kind = (mujoco.mjtBuiltin.mjBUILTIN_CHECKER, mujoco.mjtBuiltin.mjBUILTIN_FLAT, mujoco.mjtBuiltin.mjBUILTIN_GRADIENT)[i % 3]
+            mark = mujoco.mjtMark.mjMARK_RANDOM if kind != mujoco.mjtBuiltin.mjBUILTIN_GRADIENT else mujoco.mjtMark.mjMARK_NONE
+            spec.add_texture(name=f"table_rand{i}", type=mujoco.mjtTexture.mjTEXTURE_2D, builtin=kind, width=256, height=256,
+                             rgb1=list(base), rgb2=list(other), mark=mark, random=float(r.uniform(0.02, 0.3)),
+                             markrgb=list(np.clip(base * r.uniform(0.6, 1.4, 3), 0, 1)))
+            rep = float(r.uniform(2.0, 14.0))
+            m = spec.add_material(name=f"table_rand{i}_mat", texrepeat=[rep, rep], texuniform=True, reflectance=0.0)
+            m.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = f"table_rand{i}"
+
     # ---- unit conversion -----------------------------------------------------------------------
     def rad_to_units(self, q: np.ndarray) -> np.ndarray:
         lo, hi = self.jrange[:, 0], self.jrange[:, 1]
@@ -219,23 +257,24 @@ class LiftCubeEnv:
         self.object_half_width, self.object_half_height = o.half_width, o.half_height
         self.grasp_depth, self.in_site_z = o.grasp_depth, o.in_site_z
 
-    def set_object_size(self, half_width: float, half_height: float) -> None:
+    def set_object_size(self, half_width: float, half_height: float, density: float | None = None) -> None:
         """Resize the object geom in place (collision, rendering, mass, inertia) and derive the expert's grasp:
         one side of the object JAW_CLEARANCE from the fixed jaw, fingertips MIN_TIP_HEIGHT above the table or
         MAX_GRASP_DEPTH below the top, whichever is higher."""
         m, o, g = self.model, self.cfg.obj, self.object_geom
         hw, hh = half_width, half_height
+        density = density or o.density
         if o.shape == "box":
             m.geom_size[g] = [hw, hw, hh]
             m.geom_aabb[g] = [0, 0, 0, hw, hw, hh]
             m.geom_rbound[g] = np.sqrt(2 * hw**2 + hh**2)
-            mass = o.density * 8 * hw * hw * hh
+            mass = density * 8 * hw * hw * hh
             inertia = mass / 3 * np.array([hw**2 + hh**2, hw**2 + hh**2, 2 * hw**2])
         else:
             m.geom_size[g] = [hw, hh, 0.0]
             m.geom_aabb[g] = [0, 0, 0, hw, hw, hh]
             m.geom_rbound[g] = np.sqrt(hw**2 + hh**2)
-            mass = o.density * np.pi * hw**2 * 2 * hh
+            mass = density * np.pi * hw**2 * 2 * hh
             inertia = mass * np.array([(3 * hw**2 + 4 * hh**2) / 12, (3 * hw**2 + 4 * hh**2) / 12, hw**2 / 2])
         b = self.object_body
         rot = np.zeros(9)
@@ -263,15 +302,20 @@ class LiftCubeEnv:
         if self.random_size:  # before mj_resetData: mj_setConst uses the data
             hw = r.uniform(*c.obj.half_width_range)
             hh = hw if c.obj.shape == "box" else r.uniform(*c.obj.half_height_range)
-            self.set_object_size(hw, hh)
+            self.set_object_size(hw, hh, r.uniform(*c.obj.density_range) if c.obj.density_range else None)
+        if c.obj.friction_range:
+            self.model.geom_friction[self.object_geom, 0] = r.uniform(*c.obj.friction_range)
         mujoco.mj_resetData(self.model, self.data)
         q0 = np.array(c.home_qpos) + r.uniform(-c.home_noise, c.home_noise, 6)
         q0 = np.clip(q0, self.jrange[:, 0], self.jrange[:, 1])
         self.data.qpos[self.qadr] = q0
         self.data.ctrl[self.act_ids] = q0
         a = self.object_qadr
-        self.data.qpos[a : a + 3] = [r.uniform(*c.object_x), r.uniform(*c.object_y), self.object_half_height]
-        self.data.qpos[a + 3 : a + 7] = rot_z(r.uniform(-c.object_yaw_deg, c.object_yaw_deg))
+        for _ in range(100 if c.object_clearance > 0 else 1):
+            self.data.qpos[a : a + 3] = [r.uniform(*c.object_x), r.uniform(*c.object_y), c.table_z + self.object_half_height]
+            self.data.qpos[a + 3 : a + 7] = rot_z(r.uniform(-c.object_yaw_deg, c.object_yaw_deg))
+            if c.object_clearance <= 0 or self._object_robot_distance() >= c.object_clearance:
+                break
         # front camera jitter (position + small rotation)
         self.model.cam_pos[self.front_cam] = self.front_pos0 + r.uniform(-c.camera_jitter_pos, c.camera_jitter_pos, 3)
         dq = np.zeros(4)
@@ -280,6 +324,11 @@ class LiftCubeEnv:
         qq = np.zeros(4)
         mujoco.mju_mulQuat(qq, self.front_quat0, dq)
         self.model.cam_quat[self.front_cam] = qq
+        if c.wrist_cam_jitter_deg:
+            axis = r.normal(size=3)
+            mujoco.mju_axisAngle2Quat(dq, axis / np.linalg.norm(axis), np.deg2rad(r.uniform(-c.wrist_cam_jitter_deg, c.wrist_cam_jitter_deg)))
+            mujoco.mju_mulQuat(qq, self.wrist_quat0, dq)
+            self.model.cam_quat[self.wrist_cam] = qq
         self._randomize_appearance(r)
         mujoco.mj_forward(self.model, self.data)
         for _ in range(20):  # let the object settle on the table
@@ -288,6 +337,16 @@ class LiftCubeEnv:
         self._above = 0
         return self.observation()
 
+    def _object_robot_distance(self) -> float:
+        """Smallest distance (m, up to 5 cm) between the object and the robot's collision geoms at the current qpos."""
+        mujoco.mj_kinematics(self.model, self.data)
+        mujoco.mj_collision(self.model, self.data)   # also updates the geoms' bounding volumes
+        m, best = self.model, 0.05
+        for g in range(m.ngeom):
+            if m.geom_bodyid[g] not in (0, self.object_body) and (m.geom_contype[g] or m.geom_conaffinity[g]):
+                best = min(best, mujoco.mj_geomDistance(m, self.data, self.object_geom, g, 0.05, None))
+        return best
+
     def _randomize_appearance(self, r: np.random.Generator) -> None:
         """Per-episode look randomization of the real-setup profiles. Each draw happens only when its
         setting is on, so the default profile keeps exactly its original random sequence."""
@@ -295,6 +354,12 @@ class LiftCubeEnv:
         if ap.tint_jitter:
             for mid, rgba0 in self._tint0.items():
                 m.mat_rgba[mid, :3] = np.clip(rgba0[:3] * r.uniform(1 - ap.tint_jitter, 1 + ap.tint_jitter, 3), 0, 1)
+        if ap.random_table_textures:
+            own = r.random() < ap.p_own_table
+            m.geom_matid[self.table_geom] = self._table_mats[0 if own else 1 + r.integers(len(self._table_mats) - 1)]
+        if ap.background_rgb:
+            for mid in self._background_mats:
+                m.mat_rgba[mid, :3] = r.uniform(*ap.background_rgb)
         far = 0.0
         if ap.table_far_edge:  # the plane collides everywhere; its size is only what is drawn
             near = ap.table_center[0] - ap.table_half[0]
@@ -337,7 +402,7 @@ class LiftCubeEnv:
         for _ in range(self.cfg.substeps):
             mujoco.mj_step(self.model, self.data)
         self.steps += 1
-        self._above = self._above + 1 if self.object_pos[2] > self.cfg.success_height else 0
+        self._above = self._above + 1 if self.object_pos[2] - self.cfg.table_z > self.cfg.success_height else 0
         return self.observation()
 
     # ---- observations / status -----------------------------------------------------------------

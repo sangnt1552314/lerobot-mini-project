@@ -130,7 +130,7 @@ def main() -> None:
                 frames.append(np.concatenate([obs["observation.images.front"], obs["observation.images.wrist"]], axis=1))
             action = policy(obs, task=cfg.obj.task, robot_type=ROBOT_TYPE)
             obs = env.step(action)
-            max_z = max(max_z, float(env.object_pos[2]))
+            max_z = max(max_z, float(env.object_pos[2]) - cfg.table_z)   # above the table
         ok = env.is_success()
         width, height = 200 * env.object_half_width, 200 * env.object_half_height   # cm (width or diameter)
         episodes.append({"episode": ep, "seed": seed, "success": ok, "steps": env.steps, "max_object_z": round(max_z, 4),

@@ -38,7 +38,6 @@ sys.path.insert(0, str(REPO_ROOT / "sim"))
 from action_format import JOINT_ORDER  # noqa: E402
 from safety import ARM_LIMITS  # noqa: E402
 
-WRIST_CAM, FRONT_CAM = 0, 1  # OpenCV indices
 FPS = 30.0  # control rate; the policy was trained at 30
 SECONDS = 40.0  # how long the policy runs
 MAX_SPEED = 90.0  # deg/s under the policy
@@ -61,6 +60,20 @@ MJCF_RANGE = {
 # unchanged: sim 0..100 over its MJCF range, real 0..100 over the calibrated range.
 SIGN = {"shoulder_pan": 1, "shoulder_lift": 1, "elbow_flex": 1, "wrist_flex": 1, "wrist_roll": 1}
 OFFSET_DEG = {"shoulder_pan": 0.0, "shoulder_lift": 0.0, "elbow_flex": 0.0, "wrist_flex": 0.0, "wrist_roll": 0.0}
+
+# Per arm (LeRobot calibration name): OpenCV camera indices and the arm's OFFSET_DEG. macOS can renumber cameras
+# when they are replugged: preview saves the first frames to local/debug_frames/ to check which is which.
+ARMS = {
+    "home_follower": {"wrist_cam": 1, "front_cam": 0, "offset_deg": {}},
+    "my_follower": {"wrist_cam": 0, "front_cam": 1, "offset_deg": {}},
+}
+
+
+def use_arm(robot_id):
+    """Set OFFSET_DEG for this arm; returns its (wrist, front) camera indices (unknown arms: 0, 1, no offsets)."""
+    arm = ARMS.get(robot_id, {})
+    OFFSET_DEG.update(arm.get("offset_deg", {}))
+    return arm.get("wrist_cam", 0), arm.get("front_cam", 1)
 
 
 def _load_sim_config_module():
@@ -294,6 +307,7 @@ def main():
     args = parser.parse_args()
 
     checkpoint = resolve_checkpoint(args.checkpoint)
+    wrist_cam, front_cam = use_arm(args.robot_id)
     setup = infer_sim_setup(checkpoint)
     if setup is None:
         sys.exit(f"Can't tell the sim profile/object of {checkpoint} from its dataset name")
@@ -311,14 +325,23 @@ def main():
     action_box = training_action_box(checkpoint)
     print("allowed targets (arm frame): " + ", ".join(f"{n} {lo:.0f}..{hi:.0f}" for n, (lo, hi) in action_box.items()))
 
-    print(f"follower port={args.port} id={args.robot_id}")
-    cameras = CameraManager(wrist_id=WRIST_CAM, third_id=FRONT_CAM)
+    offsets = {n: v for n, v in OFFSET_DEG.items() if v}
+    print(f"follower port={args.port} id={args.robot_id}, cameras wrist={wrist_cam} front={front_cam}, "
+          f"joint offsets (real = sim + offset) {offsets or 'none'}")
+    cameras = CameraManager(wrist_id=wrist_cam, third_id=front_cam)
     warm_up(cameras)
+    debug_dir = LOCAL_DIR / "debug_frames"
+    debug_dir.mkdir(exist_ok=True)
+    for key, frame in read_rgb(cameras).items():  # what the policy sees: check the cameras aren't swapped
+        cv2.imwrite(str(debug_dir / f"act_{key}.png"), cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+    print(f"first frames: {debug_dir}/act_front.png (third-person) and act_wrist.png")
     robot = Follower(args.port, args.robot_id, keep_torque=False)
     robot.connect()
     moving = args.mode == "control"
     try:
         if moving:
+            input(f"CONTROL: the arm will move to the start pose {fmt(home)} and then run the policy.\n"
+                  "Clear the workspace, keep a hand near the arm. Enter = start, Ctrl+C = abort ")
             go_home(robot, home)
         policy.reset()
         # preview: no robot handle (never sends) and no lag check (the arm stays where it is)

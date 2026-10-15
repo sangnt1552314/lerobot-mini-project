@@ -45,6 +45,8 @@ class ObjectConfig:
     half_width_range: tuple[float, float] | None = None
     half_height_range: tuple[float, float] | None = None
     density: float = 400.0                  # kg/m^3 (hollow plastic / light wood): 5 cm cube 50 g
+    density_range: tuple[float, float] | None = None    # random-size objects: per-episode density, uniform
+    friction_range: tuple[float, float] | None = None   # per-episode sliding friction, uniform (None = friction)
 
 
 @dataclass
@@ -106,6 +108,13 @@ class Appearance:
     front_fovy_jitter_deg: float = 0.0
     wrist_fovy_range: tuple[float, float] | None = None   # None = model's 61 deg
     camera_gain_jitter: float = 0.0          # +- per RGB channel of each camera's gain (white balance)
+    # appearance randomization instead of copying the room: > 0 builds this many procedural table textures (checker,
+    # speckle, gradient; random colours and scale, never close to the object's red) and gives the table one of them
+    # per episode, or with p_own_table the setup's own table_texture. background_rgb: per-episode uniform colour
+    # (lo, hi) of the floor and walls.
+    random_table_textures: int = 0
+    p_own_table: float = 0.25
+    background_rgb: tuple[tuple[float, float, float], tuple[float, float, float]] | None = None
 
 
 @dataclass
@@ -123,15 +132,21 @@ class LiftCubeConfig:
     camera_jitter_deg: float = 1.5
     wrist_cam_rot_deg: tuple[float, float, float] = (0.0, 0.0, 0.0)   # extra rotation of the model's wrist camera
                                             # in its own frame (x, y, z): a real camera mounted at another angle
+    wrist_cam_pos_offset: tuple[float, float, float] = (0.0, 0.0, 0.0)   # m, added to its position (in its body's frame)
+    wrist_cam_jitter_deg: float = 0.0       # +- per episode about a random axis (mount tolerance)
 
     # the object and its spawn region in front of the robot
     obj: ObjectConfig = field(default_factory=ObjectConfig)
     object_x: tuple[float, float] = (0.17, 0.25)
     object_y: tuple[float, float] = (-0.07, 0.07)
     object_yaw_deg: float = 30.0            # +- uniform
+    object_clearance: float = 0.0           # m; > 0: redraw the object's x, y, yaw until it is this far from the robot at
+                                            # the start pose (a spawn region that reaches next to the folded gripper)
 
     # success: object centre this high above the table (Isaac task: 0.20 m above the robot base)
-    success_height: float = 0.10
+    success_height: float = 0.10            # above the table
+    table_z: float = 0.0                    # table surface relative to the bottom of the robot's base (< 0: the arm
+                                            # stands on a plate of that height, drawn as a disc)
     success_hold_steps: int = 5             # consecutive steps above the height
 
     # robot start pose (rad) and per-joint +- uniform noise
@@ -389,7 +404,66 @@ def _office2(cfg: LiftCubeConfig) -> LiftCubeConfig:
     )
 
 
-SETUPS = {"default": lambda cfg: cfg, "real": _real, "office": _office, "home": _home, "office2": _office2}
+def _home2(cfg: LiftCubeConfig) -> LiftCubeConfig:
+    """Home rig as used for the vision_pick demos of 2026-10-15 (local/so101_redcube_lift, 26 episodes): the home arm
+    (home_follower), the third-person webcam (OpenCV 0) in front of it looking down at it, the wide-angle wrist camera
+    (1). Fitted to 49 frames of those demos at the joints read from the arm (white printed parts' silhouette, IoU 0.55
+    at 160x120, limited by the shadowed parts) + the cube's pixel in 26 episodes <-> where the gripper closed on it
+    (9.5 px median) + the fingertips half-way down the cube when grasping: no joint offsets (the arm's calibrated
+    ranges match the model's within 1 deg, 5 deg for shoulder_lift) and the table 4.2 cm below the bottom of the base
+    (the arm stands on something; vision_pick's touch calibration says the same). The real cube is 3 cm; the room is
+    not copied: tables and background are random (Appearance.random_table_textures), as are light, shadows and the
+    cube's colour, size (2.6-3.4 cm), mass and friction. Start pose: the folded start of those demos."""
+    home = _home(cfg)
+    return replace(
+        home,
+        # the demos' start, arm frame [1.6, -101.7, 96.9, 72.9, -7.3], gripper 15.5 (shoulder_lift kept inside the
+        # model's +-100 deg range)
+        home_qpos=(0.0276, -1.7191, 1.6908, 1.2727, -0.1281, gripper_rad(15.5)),
+        home_noise=0.04,
+        table_z=-0.042,
+        front=CameraConfig(pos=(0.3572, 0.0069, 0.3775), lookat=(0.0257, 0.0287, -0.0422), fovy_deg=39.7, roll_deg=1.4),
+        camera_jitter_pos=0.015,
+        camera_jitter_deg=2.0,
+        # fitted to the cube's pixel in 415 wrist frames before the grasp (20 px median vs 31 for the model's camera; the
+        # rest is the wide lens's barrel distortion) + the jaws' silhouette (IoU 0.60 vs 0.46)
+        wrist_cam_rot_deg=(-2.3, 11.2, -5.5),
+        wrist_cam_pos_offset=(0.017, -0.003, 0.001),
+        wrist_cam_jitter_deg=2.0,
+        obj=ObjectConfig(half_width_range=(0.013, 0.017), density_range=(250.0, 700.0), friction_range=(0.6, 1.2),
+                         task="Pick up the red cube and lift it."),
+        # where the demos' cubes were (x 0.152-0.198, y -0.043..0.075; beyond x ~0.21 the cube leaves the front image),
+        # 8 mm clear of the folded gripper, whose jaw hangs down to 1.8 cm above the table at x ~0.16
+        object_x=(0.155, 0.205),
+        object_y=(-0.05, 0.07),
+        object_yaw_deg=45.0,
+        object_clearance=0.008,
+        grasp_near_start_roll=True,
+        # the model's wrist camera mount is 20 mm from the arm at this start and came within 15 mm in the real demos
+        # (no contact on this arm); the expert's plans stay >= 24 mm
+        min_camera_clearance=0.015,
+        appearance=replace(
+            home.appearance,
+            walls=(Wall("x", -0.35, (0.85, 0.85, 0.85, 1.0)),),   # behind the table (floor, bed and wall in the photos)
+            props=(   # cables lying on the table, as in the photos
+                Prop("cable1", "cylinder", (0.0025, 0.15), (0.10, -0.16, -0.0395), yaw_deg=80.0, pitch_deg=90.0,
+                     rgba=(0.03, 0.03, 0.03, 1.0), pos_jitter=(0.05, 0.04, 0.0), p_present=0.6),
+                Prop("cable2", "cylinder", (0.0025, 0.12), (0.22, 0.17, -0.0395), yaw_deg=20.0, pitch_deg=90.0,
+                     rgba=(0.03, 0.03, 0.03, 1.0), pos_jitter=(0.04, 0.04, 0.0), p_present=0.4),
+            ),
+            random_table_textures=24,
+            p_own_table=0.3,
+            background_rgb=((0.15, 0.15, 0.15), (0.95, 0.95, 0.95)),
+            object_tint_jitter=0.12,
+            front_fovy_jitter_deg=2.0,
+            wrist_fovy_range=(94.0, 105.0),       # fitted 99
+            shadow_prob=0.7,
+            light_jitter=0.4,
+        ),
+    )
+
+
+SETUPS = {"default": lambda cfg: cfg, "real": _real, "office": _office, "home": _home, "office2": _office2, "home2": _home2}
 PROFILES = tuple(SETUPS)                    # the scripts' --profile choices
 
 
