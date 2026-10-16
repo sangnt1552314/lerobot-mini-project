@@ -8,6 +8,16 @@ observation.state (6,), action (6,) with names shoulder_pan.pos..gripper.pos, ro
 task from the object ("Lift the red cube.", "Lift the red cylinder.", ...). Each frame stores the
 observation *before* the action, as lerobot-record does. Episode i uses seed --seed + attempt index, so a
 dataset is reproducible. SIMULATION ONLY.
+
+--split train|val|test (profiles with an object_region, e.g. office3): the object goes to the held-out cells of that
+split (so101_liftcube/placements.py) instead of a random spot; a placement whose demo fails is redrawn in its cell (up
+to --retries times). One dataset per split:
+    python sim_mujoco/scripts/generate.py --profile office3 --object cube --split train --num_demos 80 \
+        --repo_id local/so101_office3_cube --root .../so101_office3_cube
+    ... --split val --num_demos 10 --repo_id local/so101_office3_cube_val ...    (and test)
+Metadata next to the data: sim_mujoco_generation.json (every saved episode's placement, seed and what the env drew:
+size, mass, friction, camera pose, light, table, colours; the cell layout) and sim_mujoco_failures.json (the dropped
+attempts and their counts by reason).
 """
 
 import argparse
@@ -23,6 +33,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from so101_liftcube import JOINTS, OBJECTS, ROBOT_TYPE, LiftCubeConfig, LiftCubeEnv, PROFILES, make_config, ScriptedLiftExpert  # noqa: E402
+from so101_liftcube.placements import SPLITS, Layout  # noqa: E402
 
 
 def features(cfg: LiftCubeConfig) -> dict:
@@ -47,6 +58,8 @@ def main() -> None:
     ap.add_argument("--profile", choices=PROFILES, default="default",
                     help="physical setup the sim is matched to (start pose, camera, textures, randomization)")
     ap.add_argument("--object", choices=OBJECTS, default="cube", help="object to lift (so101_liftcube/config.py OBJECTS)")
+    ap.add_argument("--split", choices=SPLITS, default=None, help="held-out placements of this split (office3); default random")
+    ap.add_argument("--retries", type=int, default=5, help="--split: redraws in a cell after a failed demo")
     args = ap.parse_args()
 
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -61,15 +74,21 @@ def main() -> None:
     ds = LeRobotDataset.create(repo_id=args.repo_id, fps=cfg.fps, features=features(cfg), root=root,
                                robot_type=ROBOT_TYPE, use_videos=True, image_writer_threads=args.image_writer_threads)
 
+    layout = Layout(env) if args.split else None
     max_attempts = args.max_attempts or 3 * args.num_demos + 10
     saved = attempts = 0
-    episodes = []   # seed and object size of each saved episode
+    episodes = []   # placement, seed and what the env drew, of each saved episode
     failed = []     # the dropped attempts and why
+    trial = retry = 0
     t0 = time.time()
     while saved < args.num_demos and attempts < max_attempts:
-        seed = args.seed + attempts
+        if layout:
+            placement = layout.placement(args.split, trial, retry)
+            seed = placement.seed
+        else:
+            placement, seed = None, args.seed + attempts
         attempts += 1
-        obs = env.reset(seed=seed)
+        obs = env.reset(seed=seed, placement=placement)
         expert.plan()
         frames = []
         for t in range(len(expert)):
@@ -77,28 +96,39 @@ def main() -> None:
             frames.append({**obs, "action": action, "task": cfg.obj.task})
             obs = env.step(action)
         size = f"{200 * env.object_half_width:.1f} x {200 * env.object_half_height:.1f} cm"   # width/diameter x height
+        where = f"seed {seed}" + (f", {args.split} trial {trial} cell {placement.cell} retry {retry}" if layout else "")
+        info = {**({"placement": placement.as_dict()} if layout else {}), **env.episode_info,
+                "expert_ik_error": [round(e, 4) for e in expert.ik_error], "camera_clearance_m": round(float(expert.min_clearance), 4)
+                if np.isfinite(expert.min_clearance) else None}
+        reason = None
         if not expert.safe:  # the plan brings the wrist camera too close to the arm (setup's min_camera_clearance)
-            failed.append({"seed": seed, "reason": "unsafe", "camera_clearance_m": round(float(expert.min_clearance), 4)})
-            print(f"attempt {attempts} (seed {seed}, {size}): UNSAFE (wrist camera {1000 * expert.min_clearance:.0f} mm "
+            reason = "unsafe"
+            print(f"attempt {attempts} ({where}, {size}): UNSAFE (wrist camera {1000 * expert.min_clearance:.0f} mm "
                   f"from the arm), dropped", flush=True)
-            continue
-        if not env.is_success():
-            failed.append({"seed": seed, "reason": "not_lifted", "object_z_m": round(float(env.object_pos[2]), 4),
-                           "object_xy_m": np.round(env.object_pos[:2], 4).tolist(), "object_width_m": round(2 * env.object_half_width, 4)})
-            print(f"attempt {attempts} (seed {seed}, {size}): FAILED (object z {env.object_pos[2]:.3f}), dropped", flush=True)
+        elif not env.is_success():
+            reason = "not_lifted"
+            info["object_end_pos_m"] = np.round(env.object_pos, 4).tolist()
+            print(f"attempt {attempts} ({where}, {size}): FAILED (object z {env.object_pos[2]:.3f}), dropped", flush=True)
+        if reason:
+            failed.append({"attempt": attempts, "reason": reason, **info})
             if saved == 0 and attempts >= 20:
                 sys.exit(f"the expert failed the first {attempts} attempts of --profile {args.profile} --object "
                          f"{args.object}: this setup cannot do this object (e.g. the setup's gripper_closed leaves the "
                          f"jaws wider than the object); see sim_mujoco/scripts/preview.py")
+            if layout:   # redraw in the same cell, or give the cell up and go on
+                retry += 1
+                if retry > args.retries:
+                    print(f"  {args.split} cell {placement.cell}: no successful demo in {retry} draws, skipped", flush=True)
+                    trial, retry = trial + 1, 0
             continue
         for f in frames:
             ds.add_frame(f)
         ds.save_episode()
         saved += 1
-        episodes.append({"seed": seed, "object_width_m": round(2 * env.object_half_width, 4),
-                         "object_height_m": round(2 * env.object_half_height, 4)})
-        print(f"attempt {attempts} (seed {seed}, {size}): SUCCESS, episode {saved}/{args.num_demos} saved "
+        episodes.append({"episode_index": saved - 1, "frames": len(frames), **info})
+        print(f"attempt {attempts} ({where}, {size}): SUCCESS, episode {saved}/{args.num_demos} saved "
               f"({len(frames)} frames, {time.time() - t0:.0f}s elapsed)", flush=True)
+        trial, retry = trial + 1, 0
     if hasattr(ds, "stop_image_writer"):   # LeRobot 0.4.2 (Hopper); 0.6 stops it in finalize()
         ds.stop_image_writer()
     ds.finalize()
@@ -108,16 +138,22 @@ def main() -> None:
                                 cwd=Path(__file__).parent).stdout.strip()
     except OSError:
         commit = ""
+    counts = {r: sum(f["reason"] == r for f in failed) for r in sorted({f["reason"] for f in failed})}
+    (root / "sim_mujoco_failures.json").write_text(json.dumps({
+        "profile": args.profile, "object": args.object, "split": args.split, "attempts": attempts, "saved": saved,
+        "failed": len(failed), "failed_by_reason": counts, "failure_rate": len(failed) / max(attempts, 1), "failed_attempts": failed,
+    }, indent=2))
+    # last: pbs/mujoco_pipeline.pbs takes a dataset with this file as complete
     (root / "sim_mujoco_generation.json").write_text(json.dumps({
         "generator": "sim_mujoco/scripts/generate.py (MuJoCo, scripted expert)",
-        "git_commit": commit, "profile": args.profile, "object": args.object, "seed": args.seed,
-        "attempts": attempts, "saved": saved,
+        "git_commit": commit, "profile": args.profile, "object": args.object, "seed": args.seed, "split": args.split,
+        "task": cfg.obj.task, "attempts": attempts, "saved": saved, "failed": len(failed), "failed_by_reason": counts,
         "expert_success_rate": saved / max(attempts, 1), "config": dataclasses.asdict(cfg),
         "mjcf": str(os.environ.get("SO101_MJCF", "sim_mujoco/third_party/mujoco_menagerie/robotstudio_so101/so101.xml")),
-        "episodes": episodes, "failed_attempts": failed,
+        "layout": layout.summary() if layout else None, "episodes": episodes,
     }, indent=2))
     print(f"\nsaved {saved}/{args.num_demos} episodes in {attempts} attempts "
-          f"(expert success rate {100 * saved / max(attempts, 1):.1f}%), {time.time() - t0:.0f}s -> {root}")
+          f"(expert success rate {100 * saved / max(attempts, 1):.1f}%, failures {counts or 'none'}), {time.time() - t0:.0f}s -> {root}")
     if saved < args.num_demos:
         sys.exit(f"only {saved}/{args.num_demos} demos recorded")
 

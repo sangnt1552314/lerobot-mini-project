@@ -235,3 +235,4 @@ local/fallback_calibration/
 
 # vision_pick per-run debug output
 local/vision_pick/runs/
+setup_captures/

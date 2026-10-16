@@ -191,6 +191,9 @@ class Follower:
 
     def connect(self):
         self.robot.connect(calibrate=False)
+        if not self.robot.is_calibrated:  # e.g. another project wrote its own calibration into the motors
+            print(f"WARNING: the motors' calibration differs from {self.robot.calibration_fpath}: every joint reading is "
+                  "shifted (the gripper may not close). Write the file back: robot.bus.write_calibration(robot.calibration)")
 
     def state(self):
         obs = self.robot.get_observation()

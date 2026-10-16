@@ -42,6 +42,22 @@ def look_at_quat(pos, lookat) -> np.ndarray:
     return q
 
 
+def _r(a, n: int = 4):
+    """Rounded plain Python floats (lists for arrays) for JSON metadata."""
+    a = np.asarray(a, dtype=float)
+    return round(float(a), n) if a.ndim == 0 else [round(float(v), n) for v in a.ravel()]
+
+
+def point_in_polygon(p, poly) -> bool:
+    """Even-odd rule; poly is (n, 2) vertices."""
+    x, y = p
+    inside = False
+    for (x0, y0), (x1, y1) in zip(poly, np.roll(poly, -1, axis=0)):
+        if (y0 > y) != (y1 > y) and x < x0 + (y - y0) * (x1 - x0) / (y1 - y0):
+            inside = not inside
+    return inside
+
+
 def rot_z(deg: float) -> np.ndarray:
     a = np.deg2rad(deg)
     return np.array([np.cos(a / 2), 0.0, 0.0, np.sin(a / 2)])
@@ -295,13 +311,20 @@ class LiftCubeEnv:
         self.in_site_z = FIXED_JAW_Z + hw + JAW_CLEARANCE
         self.grasp_depth = hh - max(MIN_TIP_HEIGHT, 2 * hh - MAX_GRASP_DEPTH)
 
-    def reset(self, seed: int | None = None) -> dict:
+    def reset(self, seed: int | None = None, placement=None) -> dict:
+        """New episode. placement (placements.Placement): the object's x, y, yaw and size instead of random ones (the
+        held-out train / val / test cells of profiles with an object_region); everything else is still drawn from seed."""
         c = self.cfg
         self.rng = np.random.default_rng(seed)
         r = self.rng
         if self.random_size:  # before mj_resetData: mj_setConst uses the data
-            hw = r.uniform(*c.obj.half_width_range)
-            hh = hw if c.obj.shape == "box" else r.uniform(*c.obj.half_height_range)
+            if placement is not None:
+                hw, hh = placement.half_width, placement.half_height
+            elif c.p_random_size >= 1.0 or r.random() < c.p_random_size:
+                hw = r.uniform(*c.obj.half_width_range)
+                hh = hw if c.obj.shape == "box" else r.uniform(*c.obj.half_height_range)
+            else:
+                hw, hh = c.obj.half_width, c.obj.half_height
             self.set_object_size(hw, hh, r.uniform(*c.obj.density_range) if c.obj.density_range else None)
         if c.obj.friction_range:
             self.model.geom_friction[self.object_geom, 0] = r.uniform(*c.obj.friction_range)
@@ -311,11 +334,24 @@ class LiftCubeEnv:
         self.data.qpos[self.qadr] = q0
         self.data.ctrl[self.act_ids] = q0
         a = self.object_qadr
-        for _ in range(100 if c.object_clearance > 0 else 1):
-            self.data.qpos[a : a + 3] = [r.uniform(*c.object_x), r.uniform(*c.object_y), c.table_z + self.object_half_height]
-            self.data.qpos[a + 3 : a + 7] = rot_z(r.uniform(-c.object_yaw_deg, c.object_yaw_deg))
-            if c.object_clearance <= 0 or self._object_robot_distance() >= c.object_clearance:
-                break
+        if placement is not None:
+            self.data.qpos[a : a + 3] = [placement.x, placement.y, c.table_z + self.object_half_height]
+            self.data.qpos[a + 3 : a + 7] = rot_z(placement.yaw_deg)
+        else:
+            for _ in range(100 if c.object_clearance > 0 else 1):
+                self.data.qpos[a : a + 2] = self._draw_xy(r)
+                self.data.qpos[a + 2] = c.table_z + self.object_half_height
+                self.data.qpos[a + 3 : a + 7] = rot_z(r.uniform(-c.object_yaw_deg, c.object_yaw_deg))
+                if c.object_clearance <= 0 or self._object_robot_distance() >= c.object_clearance:
+                    break
+        b, g = self.object_body, self.object_geom
+        self.episode_info = {   # what this episode drew (dataset metadata, eval results)
+            "seed": seed, "object_xy_m": _r(self.data.qpos[a : a + 2]),
+            "object_yaw_deg": _r(np.degrees(2 * np.arctan2(self.data.qpos[a + 6], self.data.qpos[a + 3])), 2),
+            "object_size_m": _r([2 * self.object_half_width, 2 * self.object_half_height]),
+            "object_mass_kg": _r(self.model.body_mass[b], 5), "object_friction": _r(self.model.geom_friction[g, 0], 3),
+            "start_qpos_rad": _r(q0),
+        }
         # front camera jitter (position + small rotation)
         self.model.cam_pos[self.front_cam] = self.front_pos0 + r.uniform(-c.camera_jitter_pos, c.camera_jitter_pos, 3)
         dq = np.zeros(4)
@@ -330,12 +366,32 @@ class LiftCubeEnv:
             mujoco.mju_mulQuat(qq, self.wrist_quat0, dq)
             self.model.cam_quat[self.wrist_cam] = qq
         self._randomize_appearance(r)
+        m = self.model
+        self.episode_info.update({
+            "front_cam_pos_m": _r(m.cam_pos[self.front_cam]), "front_cam_quat": _r(m.cam_quat[self.front_cam]),
+            "wrist_cam_quat": _r(m.cam_quat[self.wrist_cam]),
+            "fovy_deg": {"front": _r(m.cam_fovy[self.front_cam], 2), "wrist": _r(m.cam_fovy[self.wrist_cam], 2)},
+            "table_material": m.material(int(m.geom_matid[self.table_geom])).name, "object_rgb": _r(m.geom_rgba[self.object_geom, :3], 3),
+            "light_diffuse": _r(m.light_diffuse[:, 0], 3), "shadows": bool(m.light_castshadow[m.light("key").id]),
+            "camera_gain": {k: _r(v, 3) for k, v in self._gain.items()},
+        })
         mujoco.mj_forward(self.model, self.data)
         for _ in range(20):  # let the object settle on the table
             mujoco.mj_step(self.model, self.data)
         self.steps = 0
         self._above = 0
         return self.observation()
+
+    def _draw_xy(self, r: np.random.Generator) -> list[float]:
+        """Uniform x, y in the object_x / object_y rectangle, or in the object_region polygon."""
+        c = self.cfg
+        if c.object_region is None:
+            return [r.uniform(*c.object_x), r.uniform(*c.object_y)]
+        poly = np.array(c.object_region)
+        while True:
+            p = r.uniform(poly.min(axis=0), poly.max(axis=0))
+            if point_in_polygon(p, poly):
+                return p.tolist()
 
     def _object_robot_distance(self) -> float:
         """Smallest distance (m, up to 5 cm) between the object and the robot's collision geoms at the current qpos."""

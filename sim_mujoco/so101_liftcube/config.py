@@ -142,6 +142,11 @@ class LiftCubeConfig:
     object_yaw_deg: float = 30.0            # +- uniform
     object_clearance: float = 0.0           # m; > 0: redraw the object's x, y, yaw until it is this far from the robot at
                                             # the start pose (a spawn region that reaches next to the folded gripper)
+    # polygon (x, y) the object's centre is drawn from instead of the object_x / object_y rectangle (office3: where the
+    # expert can pick it up and the front camera sees it, from tools/workspace_scan.py). placements.py splits it into
+    # train / val / test cells
+    object_region: tuple[tuple[float, float], ...] | None = None
+    p_random_size: float = 1.0              # objects with a size range: chance per episode of a random size (else the fixed one)
 
     # success: object centre this high above the table (Isaac task: 0.20 m above the robot base)
     success_height: float = 0.10            # above the table
@@ -463,7 +468,105 @@ def _home2(cfg: LiftCubeConfig) -> LiftCubeConfig:
     )
 
 
-SETUPS = {"default": lambda cfg: cfg, "real": _real, "office": _office, "home": _home, "office2": _office2, "home2": _home2}
+# The real objects of the office3 policies: a 3 cm cube and a 3 cm (diameter) x 3 cm cylinder. Training episodes use this
+# size, or with p_random_size a random one (placements.py: 16 of the 80 training episodes, 2.7-4.0 cm); validation and
+# test always the real size. MuJoCo sizes are half-sizes: 0.015 = 1.5 cm.
+OFFICE3_OBJECTS = {
+    "cube": ObjectConfig(half_width=0.015, half_height=0.015, half_width_range=(0.0135, 0.020),
+                         density_range=(250.0, 700.0), friction_range=(0.6, 1.2), task="Pick up the cube and lift it."),
+    "cylinder": ObjectConfig(name="cylinder", shape="cylinder", half_width=0.015, half_height=0.015,
+                             half_width_range=(0.0135, 0.020), half_height_range=(0.0135, 0.020),
+                             density_range=(250.0, 700.0), friction_range=(0.6, 1.2), task="Pick up the cylinder and lift it."),
+}
+
+
+def _office3(cfg: LiftCubeConfig) -> LiftCubeConfig:
+    """Office rig of 2026-10-16: the office arm (my_follower) near the back edge of the light wood desk, the RealSense D435
+    (RGB, OpenCV index 1) moved to a stand in front of the arm, ~51 cm above the desk, looking down and back at it; the
+    wide-angle wrist camera (0) as in office2. The front camera was fitted to the arm's silhouette in 13 photos at poses
+    read from the arm (local/setup_captures/office3, the arm moved through them by a script: IoU 0.78, flat for fovy
+    40-47.5, so the D435's 42.5 deg is kept). It sees the desk from 6.5 cm behind the base (the desk's back edge) to
+    x ~0.30 (the bottom of the image). Objects: the real 3 cm cube / cylinder (OFFICE3_OBJECTS). Spawn region: where the
+    expert lifts them and the front camera sees them (tools/workspace_scan.py), split into held-out cells by
+    placements.py. Appearance randomized instead of copied, as in home2. Start pose: the folded rest.
+
+    Joint readings are in the calibration local/run_act_policy.py uses (~/.cache/huggingface/lerobot/calibration/robots/
+    so_follower/my_follower.json, 2026-09-24). On 2026-10-16 the motors held another project's calibration (squint),
+    which shifted every reading by 2-8 deg and left the gripper 8 deg open at 0; it was written back that day and the
+    captures re-expressed in it (their pose.json keep the readings as taken). With it the gripper closes at ~1 and its
+    opening in the wrist camera matches the model's at the same reading."""
+    office2 = _office2(replace(cfg, obj=OFFICE3_OBJECTS["cube"]))
+    return replace(
+        office2,
+        # the folded rest, arm frame [3.4, -102.9, 96.0, 72.1, -92.0] (captures 0 and 12; shoulder_lift kept inside the
+        # model's +-100 deg), gripper at the office arm's floor of 8, where run_act_policy.py's homing leaves it
+        home_qpos=(0.0592, -1.7453, 1.6763, 1.2581, -1.6056, gripper_rad(8)),
+        front=CameraConfig(pos=(0.3972, -0.0534, 0.5081), lookat=(0.1840, -0.0685, 0.1700), fovy_deg=42.5, roll_deg=-1.71),
+        camera_jitter_pos=0.015,
+        camera_jitter_deg=2.0,
+        wrist_cam_jitter_deg=2.0,
+        obj=replace(OFFICE3_OBJECTS[cfg.obj.name]),
+        object_region=OFFICE3_REGION,
+        object_yaw_deg=45.0,
+        object_clearance=0.012,
+        p_random_size=0.2,
+        appearance=replace(
+            office2.appearance,
+            # the desk: back edge 6.5 cm behind the base, its right-hand edge (seen from the robot) at y -0.41; the other
+            # two edges are out of the front camera's view. Beyond it the floor ~0.75 m down and a far wall
+            table_center=(0.3175, 0.095),
+            table_half=(0.3825, 0.505),
+            table_far_edge=None,
+            walls=(Wall("x", -1.2, (0.80, 0.84, 0.88, 1.0)), Wall("y", -1.2, (0.80, 0.84, 0.88, 1.0))),
+            floor_rgba=(0.20, 0.18, 0.16, 1.0),
+            floor_z=-0.75,
+            props=(   # the monitor stand behind the desk and the wrist camera's cable lying on it
+                Prop("monitor_stand", "box", (0.03, 0.12, 0.30), (-0.20, 0.05, -0.45), rgba=(0.55, 0.56, 0.58, 1.0),
+                     pos_jitter=(0.05, 0.10, 0.0), p_present=0.7),
+                Prop("cable", "cylinder", (0.0025, 0.15), (0.12, -0.18, 0.0025), yaw_deg=80.0, pitch_deg=90.0,
+                     rgba=(0.03, 0.03, 0.03, 1.0), pos_jitter=(0.05, 0.05, 0.0), p_present=0.6),
+            ),
+            camera_gain={},
+            camera_gain_jitter=0.08,
+            random_table_textures=24,
+            p_own_table=0.3,
+            background_rgb=((0.15, 0.15, 0.15), (0.95, 0.95, 0.95)),
+            object_tint_jitter=0.12,
+            front_fovy_jitter_deg=2.0,
+            shadow_prob=0.5,
+            light_jitter=0.4,
+        ),
+    )
+
+
+def _office3_plain(cfg: LiftCubeConfig) -> LiftCubeConfig:
+    """office3 with the randomization off (the desk's own texture, fixed light, cameras, colours, the real size, mass
+    and friction): smoke tests of the expert (preview.py --profile office3_plain)."""
+    c = _office3(cfg)
+    return replace(
+        c, camera_jitter_pos=0.0, camera_jitter_deg=0.0, wrist_cam_jitter_deg=0.0, home_noise=0.0, timing_noise=0.0,
+        p_random_size=0.0, obj=replace(c.obj, density_range=None, friction_range=None, density=400.0),
+        appearance=replace(c.appearance, random_table_textures=0, background_rgb=None, tint_jitter=0.0, light_jitter=0.0,
+                           light_dir_jitter=0.0, object_tint_jitter=0.0, camera_gain_jitter=0.0, front_fovy_jitter_deg=0.0,
+                           wrist_fovy_range=(101.0, 101.0), shadow_prob=0.0,
+                           props=tuple(replace(p, pos_jitter=(0.0, 0.0, 0.0), p_present=1.0) for p in c.appearance.props)),
+    )
+
+
+# office3 spawn region (x, y of the object's centre), traced along the valid points of
+#   python sim_mujoco/tools/workspace_scan.py --profile office3 --object cube      (1.5 cm grid; map in sim_mujoco/debug/)
+# valid = on the desk >= 3 cm from its edge, fully in the front camera's image (>= 20 px margin), and lifted by the expert
+# at 3 and 4 cm with the wrist camera clear. Limits: far edge x 0.228 = the bottom of the front image (the camera sees the
+# desk only to x ~0.30); left (+y) the image's side; near the base and beyond y -0.21 at the far side the expert fails
+# (reach / wrist limits) or its plan swings the wrist camera into the arm. The folded arm lies across the middle
+# (x 0.05-0.21, y -0.07..0.05): placements.py drops points closer than object_clearance to it, leaving a U around it.
+# Grid points inside (excluding those next to the folded arm): cube 174/175 valid, cylinder 186/187 (the other "unsafe"
+# at the folded arm's edge: generate.py redraws those).
+OFFICE3_REGION = ((0.228, 0.105), (0.19, 0.12), (0.115, 0.14), (0.115, 0.06), (0.05, -0.09), (0.055, -0.24),
+                  (0.13, -0.24), (0.19, -0.21), (0.228, -0.165))
+
+SETUPS = {"default": lambda cfg: cfg, "real": _real, "office": _office, "home": _home, "office2": _office2, "home2": _home2,
+          "office3": _office3, "office3_plain": _office3_plain}
 PROFILES = tuple(SETUPS)                    # the scripts' --profile choices
 
 

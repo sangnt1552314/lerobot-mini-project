@@ -31,6 +31,14 @@
 # Only the newest 2 checkpoints are kept (KEEP_CHECKPOINTS=2, set in sim/train_act_hpc.sh);
 # qsub -v KEEP_CHECKPOINTS=0 keeps all of them.
 # Log: logs/mujoco_pipeline/<jobid>.log (ends with the success rate of every eval so far).
+#
+# Held-out splits (profiles with an object_region: office3), SPLITS=1:
+#   for o in cube cylinder; do qsub -v PROFILE=office3,OBJECT=$o,SPLITS=1,NUM_DEMOS=80,STEPS=100000 pbs/mujoco_pipeline.pbs; done
+# generates the training dataset (NUM_DEMOS, training cells) and <DATASET_NAME>_val / _test (VAL_DEMOS / TEST_DEMOS [10]
+# each, their own cells: never trained on), checkpoints and evaluates every EVAL_FREQ [10000] steps on the EPISODES [20]
+# fixed validation placements (eval/step_<step>.json, EVAL_VIDEOS [10] success + failure videos on W&B), keeps every
+# checkpoint, then picks the step with the best validation success rate (ties: the earlier one) and runs the TEST_EPISODES
+# [50] test placements on it once (eval/test_step_<step>.json, W&B test/*). The test result is never used to pick.
 
 cd $PBS_O_WORKDIR
 set -o pipefail
@@ -48,11 +56,25 @@ else
     OUTPUT_DIR="${OUTPUT_DIR:-outputs/act_${PROFILE}_${OBJECT}}"
 fi
 STEPS="${STEPS:-20000}"
+SPLITS="${SPLITS:-0}"
+SPLIT_EVAL=()
+if [ "$SPLITS" = 1 ]; then
+    EPISODES="${EPISODES:-20}"   # the fixed validation placements
+    EVAL_VIDEOS="${EVAL_VIDEOS:-10}"
+fi
 EPISODES="${EPISODES:-50}"
 EVAL_FREQ="${EVAL_FREQ:-10000}"
 EVAL_VIDEOS="${EVAL_VIDEOS:-5}"
 WANDB_ENABLE="${WANDB_ENABLE:-true}"
 TRAIN_EXTRA_ARGS="${TRAIN_EXTRA_ARGS:-}"
+if [ "$SPLITS" = 1 ]; then
+    VAL_DEMOS="${VAL_DEMOS:-10}"
+    TEST_DEMOS="${TEST_DEMOS:-10}"
+    TEST_EPISODES="${TEST_EPISODES:-50}"
+    export SAVE_FREQ="${SAVE_FREQ:-$EVAL_FREQ}"   # a checkpoint at every eval, all kept: the best one is picked at the end
+    export KEEP_CHECKPOINTS="${KEEP_CHECKPOINTS:-0}"
+    SPLIT_EVAL=(--split val)
+fi
 export DATASET_REPO_ID="local/$DATASET_NAME"
 export DATASET_ROOT="/scratch/e1583535/datasets/lerobot/$DATASET_REPO_ID"
 export OUTPUT_DIR
@@ -65,18 +87,28 @@ set -e
 echo "==== profile $PROFILE, object $OBJECT"
 echo "==== host $(hostname), $(nvidia-smi --query-gpu=name --format=csv,noheader), $(date)"
 
-echo "==== 1/3 generate $NUM_DEMOS demos -> $DATASET_ROOT"
 # generate.py writes sim_mujoco_generation.json last: a dataset without it was interrupted
-if [ -f "$DATASET_ROOT/sim_mujoco_generation.json" ]; then
-    echo "dataset already exists, reusing it"
-elif [ -e "$DATASET_ROOT" ]; then
-    echo "$DATASET_ROOT is incomplete (no sim_mujoco_generation.json): delete it and resubmit"; exit 1
+generate() {  # NUM SPLIT REPO_ID ROOT
+    local n="$1" split="$2" repo="$3" root="$4"
+    echo "==== 1/3 generate $n ${split:-random} demos -> $root"
+    if [ -f "$root/sim_mujoco_generation.json" ]; then
+        echo "dataset already exists, reusing it"
+    elif [ -e "$root" ]; then
+        echo "$root is incomplete (no sim_mujoco_generation.json): delete it and resubmit"; exit 1
+    else
+        bash sim/hpc_env.sh python sim_mujoco/scripts/generate.py --num_demos "$n" --profile "$PROFILE" --object "$OBJECT" \
+            ${split:+--split "$split"} --repo_id "$repo" --root "$root" 2>&1 | grep -v -e "^Svt" -e "Map:" -e "moov atom"
+    fi
+    bash sim/hpc_env.sh python sim/tools/inspect_dataset.py --repo-id "$repo" --root "$root" --min-episodes "$n" \
+        --video-backend pyav --out-dir "sim_mujoco/debug/dataset_$(basename "$root")"
+}
+if [ "$SPLITS" = 1 ]; then
+    generate "$NUM_DEMOS" train "$DATASET_REPO_ID" "$DATASET_ROOT"
+    generate "$VAL_DEMOS" val "${DATASET_REPO_ID}_val" "${DATASET_ROOT}_val"
+    generate "$TEST_DEMOS" test "${DATASET_REPO_ID}_test" "${DATASET_ROOT}_test"
 else
-    bash sim/hpc_env.sh python sim_mujoco/scripts/generate.py --num_demos "$NUM_DEMOS" --profile "$PROFILE" --object "$OBJECT" \
-        --repo_id "$DATASET_REPO_ID" --root "$DATASET_ROOT" 2>&1 | grep -v -e "^Svt" -e "Map:" -e "moov atom"
+    generate "$NUM_DEMOS" "" "$DATASET_REPO_ID" "$DATASET_ROOT"
 fi
-bash sim/hpc_env.sh python sim/tools/inspect_dataset.py --repo-id "$DATASET_REPO_ID" --root "$DATASET_ROOT" \
-    --video-backend pyav --out-dir "sim_mujoco/debug/dataset_$DATASET_NAME"
 
 EVAL_WANDB=()
 [ "$WANDB_ENABLE" = "true" ] && EVAL_WANDB=(--wandb)
@@ -91,7 +123,7 @@ evaluate() {  # checkpoints/last, unless it already has a result; a failed eval 
     echo "==== evaluate step $step: $EPISODES episodes  ($(date))"
     mkdir -p "$OUTPUT_DIR/eval"
     bash sim/hpc_env.sh python sim_mujoco/scripts/eval_act.py --checkpoint "$OUTPUT_DIR/checkpoints/last/pretrained_model" \
-        --episodes "$EPISODES" --profile "$PROFILE" --object "$OBJECT" --save_videos "$EVAL_VIDEOS" \
+        --episodes "$EPISODES" --profile "$PROFILE" --object "$OBJECT" --save_videos "$EVAL_VIDEOS" "${SPLIT_EVAL[@]}" \
         --results_file "$res" "${EVAL_WANDB[@]}" || echo "WARNING: eval at step $step failed"
 }
 
@@ -114,6 +146,46 @@ done
 
 echo "==== success rate per eval ($OUTPUT_DIR/eval)"
 grep -H '"success_rate"' "$OUTPUT_DIR"/eval/step_*.json || true
+
+if [ "$SPLITS" = 1 ]; then
+    best=$(bash sim/hpc_env.sh python - "$OUTPUT_DIR" <<'PY'
+import glob, json, sys
+rs = [json.load(open(f)) for f in sorted(glob.glob(f"{sys.argv[1]}/eval/step_*.json"))]
+rs = [r for r in rs if r.get("split") == "val"]
+print(max(rs, key=lambda r: (r["success_rate"], -r["train_step"]))["train_step"] if rs else "")
+PY
+)
+    [ -n "$best" ] || { echo "no validation results to pick a checkpoint from"; exit 1; }
+    best6=$(printf %06d "$best")
+    res="$OUTPUT_DIR/eval/test_step_$best6.json"
+    echo "==== final test: step $best (best validation success rate), $TEST_EPISODES test placements  ($(date))"
+    if [ -f "$res" ]; then
+        echo "already done: $res"
+    else
+        bash sim/hpc_env.sh python sim_mujoco/scripts/eval_act.py --checkpoint "$OUTPUT_DIR/checkpoints/$best6/pretrained_model" \
+            --episodes "$TEST_EPISODES" --profile "$PROFILE" --object "$OBJECT" --save_videos "$EVAL_VIDEOS" --split test \
+            --results_file "$res" "${EVAL_WANDB[@]}"
+    fi
+    bash sim/hpc_env.sh python - "$OUTPUT_DIR" "$best" "$LOG_DIR/$PBS_JOBID.log" <<'PY'
+import glob, json, re, sys
+out, best, log = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+losses = {}
+try:   # lerobot-train's log lines: "... step:20K ... loss:0.031 ..."
+    for m in re.finditer(r"step:(\d+(?:\.\d+)?)([KM]?) .*?loss:(\S+)", open(log).read()):
+        losses[int(float(m[1]) * {"": 1, "K": 1e3, "M": 1e6}[m[2]])] = float(m[3])
+except OSError:
+    pass
+print(f"{'step':>7} {'val success':>12} {'train loss':>11}  failures")
+for f in sorted(glob.glob(f"{out}/eval/step_*.json")):
+    r = json.load(open(f))
+    loss = losses.get(max([s for s in losses if s <= r["train_step"]], default=-1))
+    print(f"{r['train_step']:>7} {r['successes']:>5}/{r['episodes']:<6} {loss if loss is not None else '-':>11}  "
+          + ", ".join(f"{k} {v}" for k, v in r.get("failure_categories", {}).items() if v))
+t = json.load(open(f"{out}/eval/test_step_{best:06d}.json"))
+print(f"\nselected checkpoint: step {best}; TEST {t['successes']}/{t['episodes']} = {100 * t['success_rate']:.1f}% "
+      f"(failures: {', '.join(f'{k} {v}' for k, v in t['failure_categories'].items() if v) or 'none'})")
+PY
+fi
 
 echo "==== PIPELINE DONE ($(date))"
 } > $LOG_DIR/$PBS_JOBID.log 2>&1

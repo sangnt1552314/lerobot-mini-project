@@ -243,6 +243,61 @@ profile: [`sim_mujoco/README.md`](sim_mujoco/README.md).
    Preview saves what the policy sees to `local/debug_frames/act_{front,wrist}.png`: check front = the third-person
    view. Camera indices and joint offsets per arm are `ARMS` in `local/run_act_policy.py` (home arm: wrist 1, front 0).
 
+### Sim-to-real ACT on the office rig (`office3`): cube and cylinder at unseen positions
+
+Profile `office3` (details: [`sim_mujoco/README.md`](sim_mujoco/README.md)): the office arm, the RealSense in front of it,
+the real 3 cm cube and Ø 3 × 3 cm cylinder. The object can be anywhere in the region where the expert can lift it and
+the front camera sees it. That region is split into 100 equal-area cells: 80 training cells (one demo each), plus 10
+validation and 10 test cells spread over the region that training never uses. ACT gets only the two images and the
+joints; the expert alone uses the object's simulated pose.
+
+1. Laptop checks (`conda activate lerobot`; no GPU):
+
+   ```bash
+   python sim_mujoco/tools/workspace_scan.py --profile office3 --object cube      # the region: sim_mujoco/debug/workspace_office3_cube/map.png
+   python sim_mujoco/scripts/preview.py --profile office3_plain --object cube --episodes 20   # expert, randomization off
+   python sim_mujoco/scripts/preview.py --profile office3 --object cube --episodes 20         # expert, full randomization
+   python sim_mujoco/scripts/generate.py --profile office3 --object cube --split train --num_demos 10 \
+       --repo_id local/so101_office3_cube_smoke --root /tmp/office3_smoke
+   python sim/tools/inspect_dataset.py --repo-id local/so101_office3_cube_smoke --root /tmp/office3_smoke --video-backend pyav
+   ```
+
+2. Hopper (repo root, after `git pull`). The cube comes first; submit the cylinder once the cube's validation looks right:
+
+   ```bash
+   qsub -v PROFILE=office3,OBJECT=cube,SPLITS=1,NUM_DEMOS=80,STEPS=100000 pbs/mujoco_pipeline.pbs
+   qsub -v PROFILE=office3,OBJECT=cylinder,SPLITS=1,NUM_DEMOS=80,STEPS=100000 pbs/mujoco_pipeline.pbs
+   ```
+
+   Each job does the following:
+   - Generates 80 training demos (`so101_office3_<obj>`), plus 10 validation (`_val`) and 10 test (`_test`) demos in
+     their own cells (never trained on). Each dataset folder gets `sim_mujoco_generation.json` (per episode: placement,
+     seed, size, mass, friction, camera pose, light, table, colours; the cell layout) and `sim_mujoco_failures.json`.
+   - Trains ACT (batch 8) to 100k steps, with a checkpoint every 10k, all kept.
+   - Evaluates each checkpoint on the same 20 validation placements (`outputs/act_office3_<obj>/eval/step_<step>.json`,
+     with failure categories). Ten success/failure videos go to W&B under `eval/`.
+   - Picks the step with the best validation success rate, then runs the 50 test placements on it once
+     (`eval/test_step_<step>.json`, W&B `test/`).
+
+   The log (`logs/mujoco_pipeline/<jobid>.log`) ends with a table: validation success, training loss and failures per
+   checkpoint, the selected step, and the test result. Re-submitting resumes. Single checkpoints by hand:
+
+   ```bash
+   bash sim/hpc_env.sh python sim_mujoco/scripts/eval_act.py --profile office3 --object cube --split val --episodes 20 \
+       --save_videos 10 --checkpoint outputs/act_office3_cube/checkpoints/040000/pretrained_model
+   ```
+
+3. Real arm: copy `outputs/act_office3_<obj>/checkpoints/<selected step>` to the laptop, put the object anywhere in
+   the region (the U around the folded arm; `sim_mujoco/debug/workspace_office3_cube/map.png`), then
+
+   ```bash
+   bash local/run_office.sh act_office3_cube/checkpoints/<step> preview   # never moves; check local/debug_frames/
+   bash local/run_office.sh act_office3_cube/checkpoints/<step>           # homes to the folded start, runs the policy
+   ```
+
+   If it prints `WARNING: the motors' calibration differs`, another project (squint) has written its calibration into
+   the motors. Every joint is then off by a few degrees, and the gripper can't close. Write this repo's back first.
+
 ### Pickup without learning: `local/vision_pick`
 
 Red-cube detection (OpenCV) + a camera->table homography calibrated by touching the cube with the gripper + top-down
