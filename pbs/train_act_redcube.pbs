@@ -1,0 +1,40 @@
+#!/bin/bash
+#PBS -P CFP05-CF-002
+#PBS -j oe
+#PBS -k oed
+#PBS -N act-redcube
+#PBS -q auto
+#PBS -l select=1:ngpus=1
+#PBS -l walltime=06:00:00
+
+# Train ACT from scratch on tsangb34/so101_redcube_lift (downloaded from the Hub into
+# /scratch/e1583535/datasets/lerobot on the first run). Env: sim/hpc_env.sh (qsub pbs/setup_act_env.pbs once).
+# Submit from the repository root:
+#   qsub pbs/train_act_redcube.pbs
+#   qsub -v STEPS=20000 pbs/train_act_redcube.pbs
+# Log: logs/act_redcube/<jobid>.log
+# Checkpoint: outputs/act_redcube_<jobid>/checkpoints/last/pretrained_model
+
+cd "$PBS_O_WORKDIR" || exit 1
+
+module load singularity
+
+JOB="${PBS_JOBID%%.*}"
+mkdir -p logs/act_redcube
+
+bash sim/hpc_env.sh env HF_HUB_OFFLINE=0 lerobot-train \
+    --dataset.repo_id=tsangb34/so101_redcube_lift \
+    --dataset.video_backend=pyav \
+    --dataset.image_transforms.enable=true \
+    --policy.type=act \
+    --policy.device=cuda \
+    --policy.push_to_hub=false \
+    --output_dir=outputs/act_redcube_$JOB \
+    --job_name=act_redcube \
+    --batch_size=8 \
+    --steps="${STEPS:-50000}" \
+    --save_freq=10000 \
+    --log_freq=200 \
+    --num_workers=10 \
+    --wandb.enable=false \
+    > logs/act_redcube/$JOB.log 2>&1
