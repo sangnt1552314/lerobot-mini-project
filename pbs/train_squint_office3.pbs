@@ -1,0 +1,24 @@
+#!/bin/bash
+#PBS -P CFP05-CF-002
+#PBS -j oe
+#PBS -k oed
+#PBS -N squint-office3
+#PBS -q auto
+#PBS -l select=1:ngpus=1:ncpus=8
+#PBS -l walltime=01:00:00
+
+# Squint (third_party/squint) on the office3 envs (sim_squint/office3_env.py). Submit from the repository root:
+#   qsub pbs/train_squint_office3.pbs                                          # cube, front + wrist camera
+#   qsub -v ENV_ID=SO101LiftCubeOffice3-v1 pbs/train_squint_office3.pbs        # front (D435) only
+#   qsub -v ENV_ID=SO101LiftCylinderOffice3Wrist-v1,SEED=2 pbs/train_squint_office3.pbs
+#   EXTRA="--track --wandb_entity=..." for wandb.   Checkpoints: outputs/squint/runs/<env>_s<seed>/ckpt.pt
+# Held-out check of a checkpoint: ...Office3{,Wrist,Both}Val-v1 with --evaluate --checkpoint=<ckpt.pt>
+cd $PBS_O_WORKDIR
+R=$PBS_O_WORKDIR
+ENV_ID="${ENV_ID:-SO101LiftCubeOffice3Both-v1}"
+SEED="${SEED:-1}"
+STEPS="${STEPS:-1500000}"
+mkdir -p logs/squint outputs/squint
+cd outputs/squint
+bash $R/sim_squint/env.sh python $R/sim_squint/train.py --env_id=$ENV_ID --seed=$SEED --total_timesteps=$STEPS \
+    --exp_name=${ENV_ID}_s${SEED} ${EXTRA:-} > $R/logs/squint/train.${ENV_ID}_s${SEED}.$PBS_JOBID.log 2>&1

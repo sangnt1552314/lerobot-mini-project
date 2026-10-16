@@ -27,4 +27,15 @@ mkdir -p $LOG_DIR
 export NCPUS="${NCPUS:-12}"
 export USAGE_CSV="${USAGE_CSV:-$PWD/$LOG_DIR/$PBS_JOBID.usage.csv}"
 
+# Keep every cache off $HOME (small quota). sim/hpc_env.sh runs `singularity exec -e`, which drops the host
+# env, so the container copies go through SINGULARITYENV_*. (hpc_env.sh also sets HF_HOME/TORCH_HOME to the same paths.)
+CACHE_DIR=/scratch/e1583535/cache
+mkdir -p "$CACHE_DIR"
+for kv in HF_HOME="$CACHE_DIR" HF_DATASETS_CACHE="$CACHE_DIR/datasets" TORCH_HOME="$CACHE_DIR/torch" \
+          XDG_CACHE_HOME="$CACHE_DIR" PIP_CACHE_DIR="$CACHE_DIR/pip" TRITON_CACHE_DIR="$CACHE_DIR/triton" \
+          WANDB_CACHE_DIR="$CACHE_DIR/wandb" WANDB_DATA_DIR="$CACHE_DIR/wandb" MPLCONFIGDIR="$CACHE_DIR/matplotlib"; do
+    export "$kv" "SINGULARITYENV_$kv" "APPTAINERENV_$kv"
+done
+export SINGULARITY_CACHEDIR="$CACHE_DIR/singularity" APPTAINER_CACHEDIR="$CACHE_DIR/singularity"
+
 bash scripts/train_act.sh > $LOG_DIR/$PBS_JOBID.log 2>&1

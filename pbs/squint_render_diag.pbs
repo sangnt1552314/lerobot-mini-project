@@ -1,0 +1,13 @@
+#!/bin/bash
+#PBS -P CFP05-CF-002
+#PBS -j oe
+#PBS -k oed
+#PBS -N squint-render
+#PBS -q auto
+#PBS -l select=1:ngpus=1:ncpus=4
+#PBS -l walltime=00:05:00
+
+# Which Vulkan setup renders on a GPU node outside the container.   qsub pbs/squint_render_diag.pbs
+cd $PBS_O_WORKDIR
+mkdir -p logs/squint
+{ nvidia-smi -L; bash sim_squint/tools/render_diag.sh; } > logs/squint/render_variants_job.$PBS_JOBID.log 2>&1

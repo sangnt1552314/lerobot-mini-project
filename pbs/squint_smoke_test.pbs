@@ -1,0 +1,22 @@
+#!/bin/bash
+#PBS -P CFP05-CF-002
+#PBS -j oe
+#PBS -k oed
+#PBS -N squint-smoke
+#PBS -q auto
+#PBS -l select=1:ngpus=1:ncpus=8
+#PBS -l walltime=00:15:00
+
+# Office3 squint envs on a GPU: camera images -> sim_squint/debug/smoke/, front camera vs office3's, random steps; then
+# 30k steps of squint training (plumbing only).   qsub pbs/squint_smoke_test.pbs    Log: logs/squint/smoke.<jobid>.log
+cd $PBS_O_WORKDIR
+mkdir -p logs/squint outputs/squint
+{
+set -ex
+nvidia-smi --query-gpu=name,driver_version --format=csv,noheader
+ldconfig -p | grep -i -E "libGLX_nvidia|libvulkan.so" || true
+bash sim_squint/env.sh python sim_squint/tools/smoke_test.py
+R=$PBS_O_WORKDIR; cd outputs/squint
+bash $R/sim_squint/env.sh python $R/sim_squint/train.py --env_id=SO101LiftCubeOffice3Both-v1 --exp_name=smoke_$PBS_JOBID \
+    --num_envs=256 --total_timesteps=30000 --eval_freq=20000 --learning_starts=2000
+} > logs/squint/smoke.$PBS_JOBID.log 2>&1
