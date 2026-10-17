@@ -5,7 +5,7 @@
 #PBS -N squint-office3
 #PBS -q auto
 #PBS -l select=1:ngpus=1:ncpus=8
-#PBS -l walltime=01:00:00
+#PBS -l walltime=02:00:00
 
 # Squint (third_party/squint) on the office3 envs (sim_squint/office3_env.py). Submit from the repository root:
 #   qsub pbs/train_squint_office3.pbs                                          # cube, front + wrist camera
